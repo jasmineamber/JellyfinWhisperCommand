@@ -1,0 +1,12 @@
+# Build output
+[Bb]in/
+[Oo]bj/
+
+# IDE files
+.vs/
+*.user
+*.suo
+
+# Local configuration and credentials
+appsettings.json
+user-settings.json
