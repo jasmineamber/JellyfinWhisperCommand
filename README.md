@@ -22,3 +22,11 @@ The project requires a Windows .NET 8 SDK. No third-party NuGet packages are use
 dotnet build .\JellyfinWhisperCommand.csproj
 dotnet run --project .\JellyfinWhisperCommand.csproj
 ```
+
+## Release build
+
+Run the PowerShell script below. It closes a running copy of the application before building to the standard `bin\Release\net8.0-windows` directory.
+
+```powershell
+.\scripts\Build-Release.ps1
+```
