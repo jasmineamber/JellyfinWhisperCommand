@@ -8,5 +8,4 @@
 *.suo
 
 # Local configuration and credentials
-appsettings.json
 user-settings.json
