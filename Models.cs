@@ -14,6 +14,7 @@ public sealed class JellyfinSettings
 
 public sealed class WhisperJavSettings
 {
+    public string ExecutablePath { get; init; } = "whisperjav.exe";
     public string OutputDir { get; init; } = "D:\\Temp\\output";
     public string TranslateModel { get; init; } = "deepseek-v4-flash";
     public string TranslateApiKey { get; init; } = "";
