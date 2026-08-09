@@ -4,6 +4,7 @@ public sealed class AppSettings
 {
     public JellyfinSettings Jellyfin { get; init; } = new();
     public WhisperJavSettings WhisperJav { get; init; } = new();
+    public SeconvSettings Seconv { get; init; } = new();
 }
 
 public sealed class JellyfinSettings
@@ -19,6 +20,13 @@ public sealed class WhisperJavSettings
     public string TranslateModel { get; init; } = "deepseek-v4-flash";
     public string TranslateApiKey { get; init; } = "";
     public string TranslateEndpoint { get; init; } = "";
+}
+
+public sealed class SeconvSettings
+{
+    public string ExecutablePath { get; init; } = "seconv";
+    public string MultipleReplaceRulesFile { get; init; } = "D:\\Temp\\SE_Replace_Rules.csv";
+    public string InputFolder { get; init; } = "D:\\Temp";
 }
 
 public sealed class UserSettings

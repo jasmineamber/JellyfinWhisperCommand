@@ -8,7 +8,8 @@ public sealed class MainViewModel : ObservableObject
     private readonly JellyfinClient? _client;
     private readonly Dispatcher _dispatcher;
     private readonly string _logFilePath = Path.Combine(AppContext.BaseDirectory, "execution.log");
-    private readonly object _logFileLock = new();
+    // Keeps the log file and the UI dispatcher queue in the same order.
+    private readonly object _logLock = new();
     private readonly object _executionLock = new();
     private readonly HashSet<string> _selectedIds = [];
     private Process? _activeProcess;
@@ -166,9 +167,12 @@ public sealed class MainViewModel : ObservableObject
             IsStatusVisible = true;
             AppendLog($"开始准备任务，已选择 {_selectedIds.Count} 个媒体。");
             var paths = new List<string>();
+            var mediaPaths = new List<string>();
             foreach (var itemId in _selectedIds)
             {
-                paths.AddRange(await _client.GetPathsAsync(itemId));
+                var itemPaths = await _client.GetPathsAsync(itemId);
+                paths.AddRange(itemPaths);
+                if (itemPaths.FirstOrDefault() is { } mediaPath) mediaPaths.Add(mediaPath);
             }
             if (paths.Count == 0) throw new InvalidOperationException("已选媒体没有可用路径。");
 
@@ -214,6 +218,24 @@ public sealed class MainViewModel : ObservableObject
             {
                 AppendLog($"进程已退出，退出码: {process.ExitCode}。");
                 StatusMessage = process.ExitCode == 0 ? "命令执行完成。" : $"命令执行结束，退出码: {process.ExitCode}。";
+                if (process.ExitCode == 0)
+                {
+                    var seconvResult = await ExecuteSeconvCommandsAsync(mediaPaths);
+                    if (seconvResult.SubtitleCopied && !string.IsNullOrWhiteSpace(SelectedLibraryId))
+                    {
+                        AppendLog("已成功复制字幕，正在请求 Jellyfin 刷新当前媒体库。");
+                        try
+                        {
+                            await _client.RefreshLibraryAsync(SelectedLibraryId);
+                            AppendLog("Jellyfin 媒体库刷新请求已提交。");
+                        }
+                        catch (Exception ex)
+                        {
+                            AppendLog($"[错误] 无法刷新 Jellyfin 媒体库: {ex.Message}");
+                        }
+                    }
+                    if (seconvResult.AllSucceeded) StatusMessage = "所有命令执行完成。";
+                }
             if (ShutdownWhenComplete)
                 {
                     AppendLog("已启用执行完后关机，正在请求系统关机。");
@@ -240,6 +262,116 @@ public sealed class MainViewModel : ObservableObject
             StopCommand.RaiseCanExecuteChanged();
         }
     }
+
+    private async Task<SeconvResult> ExecuteSeconvCommandsAsync(IEnumerable<string> mediaPaths)
+    {
+        const int repeatCount = 5;
+        var targets = mediaPaths.ToList();
+        if (targets.Count == 0)
+        {
+            AppendLog("[错误] 没有可用于 Seconv 后处理的媒体路径。");
+            return new SeconvResult(false, false);
+        }
+
+        AppendLog($"开始 Seconv 后处理：{targets.Count} 个媒体，每个媒体最多执行 {repeatCount} 次。");
+        var allSucceeded = true;
+        var subtitleCopied = false;
+        foreach (var mediaPath in targets)
+        {
+            var mediaSucceeded = true;
+            try
+            {
+            for (var attempt = 1; attempt <= repeatCount; attempt++)
+            {
+                if (IsStopping) return new SeconvResult(false, subtitleCopied);
+
+                var startInfo = CommandBuilder.BuildSeconvStartInfo(mediaPath, _settings.Seconv);
+                if (Path.IsPathFullyQualified(startInfo.FileName) && !File.Exists(startInfo.FileName))
+                    throw new FileNotFoundException("未找到 Seconv 可执行文件，请检查 appsettings.json 中 Seconv.ExecutablePath。", startInfo.FileName);
+
+                AppendLog($"执行 Seconv（{attempt}/{repeatCount}）：{mediaPath}");
+                using var job = new ProcessJob();
+                using var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
+                process.OutputDataReceived += (_, e) => { if (e.Data is not null) AppendLog(e.Data); };
+                process.ErrorDataReceived += (_, e) => { if (e.Data is not null) AppendLog($"[stderr] {e.Data}"); };
+
+                if (!process.Start()) throw new InvalidOperationException("无法启动 Seconv 进程。");
+                try
+                {
+                    job.Add(process);
+                }
+                catch
+                {
+                    await StopProcessTreeAsync(process.Id);
+                    throw;
+                }
+                lock (_executionLock)
+                {
+                    _activeProcess = process;
+                    _activeJob = job;
+                }
+                process.BeginOutputReadLine();
+                process.BeginErrorReadLine();
+                StatusMessage = $"正在执行 Seconv：{Path.GetFileName(mediaPath)}（{attempt}/{repeatCount}）...";
+                await process.WaitForExitAsync();
+
+                if (IsStopping)
+                {
+                    AppendLog("Seconv 后处理已终止。");
+                    StatusMessage = "命令已终止。";
+                    return new SeconvResult(false, subtitleCopied);
+                }
+                if (process.ExitCode != 0)
+                {
+                    AppendLog($"[错误] Seconv 执行失败，媒体: {mediaPath}，轮次: {attempt}/{repeatCount}，退出码: {process.ExitCode}。该媒体后续循环已停止，将继续处理其他媒体。");
+                    StatusMessage = $"Seconv 执行失败，退出码: {process.ExitCode}。";
+                    mediaSucceeded = false;
+                    allSucceeded = false;
+                    break;
+                }
+                AppendLog($"Seconv 执行成功，媒体: {mediaPath}，轮次: {attempt}/{repeatCount}。");
+            }
+
+            if (!mediaSucceeded) continue;
+
+            var mediaFolder = Path.GetDirectoryName(mediaPath);
+            var subtitleName = $"{Path.GetFileNameWithoutExtension(mediaPath)}.chi.whisperjav.srt";
+            if (string.IsNullOrWhiteSpace(mediaFolder) || string.IsNullOrWhiteSpace(Path.GetFileNameWithoutExtension(mediaPath)))
+                throw new InvalidOperationException($"媒体路径无效，无法复制字幕: {mediaPath}");
+
+            var sourceSubtitlePath = Path.Combine(_settings.Seconv.InputFolder, subtitleName);
+            var destinationSubtitlePath = Path.Combine(mediaFolder, subtitleName);
+            if (!File.Exists(sourceSubtitlePath))
+            {
+                AppendLog($"[错误] Seconv 后未找到转换后的字幕: {sourceSubtitlePath}。将继续处理其他媒体。");
+                allSucceeded = false;
+                continue;
+            }
+            try
+            {
+                File.Copy(sourceSubtitlePath, destinationSubtitlePath, overwrite: true);
+                AppendLog($"已复制转换后的字幕: {destinationSubtitlePath}");
+                subtitleCopied = true;
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"[错误] 无法复制字幕到媒体目录: {destinationSubtitlePath}。{ex.Message} 将继续处理其他媒体。");
+                allSucceeded = false;
+                continue;
+            }
+            }
+            catch (Exception ex)
+            {
+                AppendLog($"[错误] 处理媒体失败: {mediaPath}。{ex.Message} 将继续处理其他媒体。");
+                allSucceeded = false;
+            }
+        }
+
+        StatusMessage = allSucceeded ? "Seconv 后处理完成。" : "Seconv 后处理完成，部分媒体失败。";
+        return new SeconvResult(allSucceeded, subtitleCopied);
+    }
+
+    private readonly record struct SeconvResult(bool AllSucceeded, bool SubtitleCopied);
 
     private async Task StopAsync()
     {
@@ -299,24 +431,21 @@ public sealed class MainViewModel : ObservableObject
     private void AppendLog(string message)
     {
         var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}";
-        try
+        lock (_logLock)
         {
-            lock (_logFileLock)
+            try
             {
                 File.AppendAllText(_logFilePath, line + Environment.NewLine, Encoding.UTF8);
             }
-        }
-        catch
-        {
-            // Logging must not interrupt the command when the log file cannot be written.
-        }
+            catch
+            {
+                // Logging must not interrupt the command when the log file cannot be written.
+            }
 
-        if (_dispatcher.CheckAccess())
-        {
-            LogText += Environment.NewLine + line;
-            return;
+            // Always enqueue, including calls made on the UI thread. This prevents direct
+            // UI updates from overtaking earlier background-process output.
+            _dispatcher.BeginInvoke(() => LogText += Environment.NewLine + line);
         }
-        _dispatcher.BeginInvoke(() => LogText += Environment.NewLine + line);
     }
 
     private void RefreshPaging()

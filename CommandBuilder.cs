@@ -2,6 +2,30 @@ namespace JellyfinWhisperCommand;
 
 public static class CommandBuilder
 {
+    public static ProcessStartInfo BuildSeconvStartInfo(string mediaPath, SeconvSettings settings)
+    {
+        var mediaName = Path.GetFileNameWithoutExtension(mediaPath);
+        if (string.IsNullOrWhiteSpace(mediaName))
+            throw new InvalidOperationException($"Invalid media path: {mediaPath}");
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = settings.ExecutablePath,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add($"{mediaName}.chi.whisperjav.srt");
+        startInfo.ArgumentList.Add("subrip");
+        AddArgument(startInfo, "--multiple-replace", settings.MultipleReplaceRulesFile);
+        AddArgument(startInfo, "--input-folder", settings.InputFolder);
+        startInfo.ArgumentList.Add("--overwrite");
+        return startInfo;
+    }
+
     public static ProcessStartInfo BuildStartInfo(IEnumerable<string> paths, WhisperJavSettings settings)
     {
         var pass1 = """{"model_name":"large-v2","device":"cuda","temperature":[0],"compression_ratio_threshold":2.4,"logprob_threshold":-1,"logprob_margin":0,"no_speech_threshold":0.71,"beam_size":2,"best_of":2,"patience":1.2,"suppress_blank":true,"without_timestamps":false,"condition_on_previous_text":false,"word_timestamps":true,"repetition_penalty":1.3,"no_repeat_ngram_size":3,"chunk_length":30,"max_initial_timestamp":0,"threshold":0.3,"min_speech_duration_ms":150,"min_silence_duration_ms":150,"max_speech_duration_s":5,"speech_pad_ms":400,"chunk_threshold_s":1,"max_group_duration_s":10,"force_cpu":"false","scene_detection_method":"auditok","min_duration":20,"max_duration":420,"snap_window":5,"clustering_threshold":18,"visualize":false}""";

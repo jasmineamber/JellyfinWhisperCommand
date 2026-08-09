@@ -10,6 +10,8 @@ Before starting, copy `appsettings.example.json` as `appsettings.json` next to t
 - `Jellyfin.ApiKey`: Jellyfin API key
 - `WhisperJav.ExecutablePath`: full path to `whisperjav.exe`; the process runs with this file's directory as its working directory
 - `WhisperJav.OutputDir`, `TranslateModel`, `TranslateApiKey`, `TranslateEndpoint`: command values
+- `Seconv.ExecutablePath`: the `seconv` executable or command available on `PATH`
+- `Seconv.MultipleReplaceRulesFile` and `Seconv.InputFolder`: values passed to Seconv's `--multiple-replace` and `--input-folder` options. After WhisperJav succeeds, each selected media is processed 5 times with the same Seconv command and no `--output-folder`. The resulting subtitle is then copied from `InputFolder` into the selected media's folder. A failed media stops only its remaining loops and then processing continues with the next selected media.
 
 The remembered media library is written beside the program as `user-settings.json`. It is intentionally not placed in AppData.
 Execution output is shown in the "日志" tab and is also appended to `execution.log` beside the program.

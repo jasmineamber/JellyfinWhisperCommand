@@ -69,6 +69,14 @@ public sealed class JellyfinClient : IDisposable
         return paths.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     }
 
+    public async Task RefreshLibraryAsync(string libraryId)
+    {
+        using var response = await _http.PostAsync(
+            $"{_baseUrl}/Items/{Uri.EscapeDataString(libraryId)}/Refresh?Recursive=true&MetadataRefreshMode=Default&ImageRefreshMode=None&ReplaceAllMetadata=false&ReplaceAllImages=false",
+            content: null);
+        await EnsureSuccessAsync(response);
+    }
+
     public string GetImageUrl(JellyfinItem item)
     {
         var tag = item.ImageTags?.GetValueOrDefault("Primary");
