@@ -9,12 +9,18 @@ Before starting, copy `appsettings.example.json` as `appsettings.json` next to t
 - `Jellyfin.BaseUrl`: Jellyfin server address, such as `http://192.168.2.24:8096`
 - `Jellyfin.ApiKey`: Jellyfin API key
 - `WhisperJav.ExecutablePath`: full path to `whisperjav.exe`; the process runs with this file's directory as its working directory
-- `WhisperJav.OutputDir`, `TranslateModel`, `TranslateApiKey`, `TranslateEndpoint`: command values
+- `WhisperJav.OutputDir`: directory where transcription subtitles are written
+- `WhisperJavTranslate`: configuration for `whisperjav-translate.exe`, including its path, provider, endpoint, API key, model, source and target language, and tone
 - `Seconv.ExecutablePath`: the `seconv` executable or command available on `PATH`
-- `Seconv.MultipleReplaceRulesFile` and `Seconv.InputFolder`: values passed to Seconv's `--multiple-replace` and `--input-folder` options. After WhisperJav succeeds, each selected media is processed 5 times with the same Seconv command and no `--output-folder`. The resulting subtitle is then copied from `InputFolder` into the selected media's folder. A failed media stops only its remaining loops and then processing continues with the next selected media.
+- `Seconv.MultipleReplaceRulesFile` and `Seconv.InputFolder`: values passed to Seconv's `--multiple-replace` and `--input-folder` options. Every path returned for a selected Jellyfin item is processed as an individual task: WhisperJav transcribes first, `whisperjav-translate.exe` translates the resulting `.ja.merged.whisperjav.srt` file, and only then does Seconv run 5 times with no `--output-folder`. The resulting subtitle is moved from `InputFolder` into the media's folder. A failed stage skips the remaining stages for that path and processing continues with the next path.
+
+Translation is considered successful only when the process exits with code `0` **and** emits `All subtitles translated: YES`. An `All subtitles translated: NO` result is treated as a failure and does not run Seconv.
+
+Retryable translation failures are persisted beside the executable in `failed-translation-tasks.json`. Use **重试失败翻译 (N)** to retry every queued item without searching for or selecting media. Each item leaves the queue only after translation and Seconv both succeed; it remains queued when a retry fails again.
 
 The remembered media library is written beside the program as `user-settings.json`. It is intentionally not placed in AppData.
 Execution output is shown in the "日志" tab and is also appended to `execution.log` beside the program.
+WhisperJav failures are additionally appended to `failed-whisperjav-tasks.log` with the media ID, name, path, and failure reason.
 
 `appsettings.json` and `user-settings.json` remain beside the executable and are excluded from Git because they can contain credentials and personal selection state.
 

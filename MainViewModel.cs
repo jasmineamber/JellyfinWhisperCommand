@@ -8,9 +8,12 @@ public sealed class MainViewModel : ObservableObject
     private readonly JellyfinClient? _client;
     private readonly Dispatcher _dispatcher;
     private readonly string _logFilePath = Path.Combine(AppContext.BaseDirectory, "execution.log");
+    private readonly string _failedWhisperJavLogFilePath = Path.Combine(AppContext.BaseDirectory, "failed-whisperjav-tasks.log");
+    private readonly List<TranslationRetryTask> _failedTranslationTasks;
     // Keeps the log file and the UI dispatcher queue in the same order.
     private readonly object _logLock = new();
     private readonly object _executionLock = new();
+    private readonly object _retryQueueLock = new();
     private readonly HashSet<string> _selectedIds = [];
     private Process? _activeProcess;
     private ProcessJob? _activeJob;
@@ -55,11 +58,19 @@ public sealed class MainViewModel : ObservableObject
     public string LogText { get => _logText; private set => SetProperty(ref _logText, value); }
     public bool CanGoPrevious => _pageIndex > 0;
     public bool CanGoNext => (_pageIndex + 1) * PageSize < _totalCount;
+    public string RetryFailedTranslationButtonText
+    {
+        get
+        {
+            lock (_retryQueueLock) return $"重试失败翻译 ({_failedTranslationTasks.Count})";
+        }
+    }
     public string PageText => _totalCount == 0 ? "第 0 / 0 页" : $"第 {_pageIndex + 1} / {Math.Ceiling(_totalCount / (double)PageSize)} 页";
     public string SelectionSummary => $"已选择 {_selectedIds.Count} 个媒体";
 
     public AsyncRelayCommand SearchCommand { get; }
     public AsyncRelayCommand GenerateCommand { get; }
+    public AsyncRelayCommand RetryFailedTranslationCommand { get; }
     public AsyncRelayCommand StopCommand { get; }
     public AsyncRelayCommand PreviousPageCommand { get; }
     public AsyncRelayCommand NextPageCommand { get; }
@@ -68,6 +79,14 @@ public sealed class MainViewModel : ObservableObject
     {
         _dispatcher = Dispatcher.CurrentDispatcher;
         _userSettings = SettingsStore.LoadUserSettings();
+        try
+        {
+            _failedTranslationTasks = SettingsStore.LoadTranslationRetryTasks();
+        }
+        catch
+        {
+            _failedTranslationTasks = [];
+        }
         try
         {
             _settings = SettingsStore.LoadAppSettings();
@@ -81,6 +100,7 @@ public sealed class MainViewModel : ObservableObject
 
         SearchCommand = new AsyncRelayCommand(SearchAsync, () => _client is not null && !string.IsNullOrWhiteSpace(SelectedLibraryId));
         GenerateCommand = new AsyncRelayCommand(ExecuteAsync, () => _client is not null && _selectedIds.Count > 0 && !IsExecuting);
+        RetryFailedTranslationCommand = new AsyncRelayCommand(RetryFailedTranslationsAsync, () => _failedTranslationTasks.Count > 0 && !IsExecuting);
         StopCommand = new AsyncRelayCommand(StopAsync, () => IsExecuting && !IsStopping);
         PreviousPageCommand = new AsyncRelayCommand(async () => { _pageIndex--; await LoadPageAsync(); }, () => CanGoPrevious);
         NextPageCommand = new AsyncRelayCommand(async () => { _pageIndex++; await LoadPageAsync(); }, () => CanGoNext);
@@ -160,6 +180,433 @@ public sealed class MainViewModel : ObservableObject
         IsExecuting = true;
         IsStopping = false;
         GenerateCommand.RaiseCanExecuteChanged();
+        RetryFailedTranslationCommand.RaiseCanExecuteChanged();
+        StopCommand.RaiseCanExecuteChanged();
+        try
+        {
+            IsStatusVisible = true;
+            var selectedIds = _selectedIds.ToList();
+            var tasks = new List<MediaPathTask>();
+            AppendLog($"Preparing {selectedIds.Count} selected media item(s).");
+            foreach (var itemId in selectedIds)
+            {
+                var itemPaths = await _client.GetPathsAsync(itemId);
+                var mediaName = MediaItems.FirstOrDefault(item => item.Id == itemId)?.Name ?? itemId;
+                tasks.AddRange(itemPaths.Select(path => new MediaPathTask(itemId, mediaName, path)));
+            }
+
+            if (tasks.Count == 0)
+                throw new InvalidOperationException("The selected media items have no usable paths.");
+
+            var validationStartInfo = CommandBuilder.BuildStartInfo([tasks[0].Path], _settings.WhisperJav);
+            if (!File.Exists(validationStartInfo.FileName))
+            {
+                const string failure = "WhisperJav executable was not found.";
+                foreach (var task in tasks) AppendWhisperJavFailure(task, failure);
+                throw new FileNotFoundException("WhisperJav executable was not found.", validationStartInfo.FileName);
+            }
+
+            SelectedTabIndex = 1;
+            AppendLog($"WhisperJav executable: {validationStartInfo.FileName}");
+            AppendLog($"Path tasks to run: {tasks.Count}");
+            var allSucceeded = true;
+            var subtitleMoved = false;
+
+            for (var taskIndex = 0; taskIndex < tasks.Count; taskIndex++)
+            {
+                if (IsStopping) break;
+
+                var task = tasks[taskIndex];
+                if (!await ExecuteWhisperJavAsync(task, taskIndex + 1, tasks.Count))
+                {
+                    allSucceeded = false;
+                    continue;
+                }
+                if (IsStopping) break;
+
+                if (!await ExecuteSubtitleTranslationAsync(task, taskIndex + 1, tasks.Count))
+                {
+                    allSucceeded = false;
+                    continue;
+                }
+                if (IsStopping) break;
+
+                var seconvResult = await ExecuteSeconvCommandsAsync([task.Path]);
+                allSucceeded &= seconvResult.AllSucceeded;
+                subtitleMoved |= seconvResult.SubtitleCopied;
+                if (seconvResult.AllSucceeded) RemoveTranslationRetryTask(task.Path);
+            }
+
+            if (IsStopping)
+            {
+                AppendLog("Task queue stopped.");
+                StatusMessage = "Task queue stopped.";
+            }
+            else
+            {
+                if (subtitleMoved && !string.IsNullOrWhiteSpace(SelectedLibraryId))
+                {
+                    try
+                    {
+                        await _client.RefreshLibraryAsync(SelectedLibraryId);
+                        AppendLog("Jellyfin library refresh requested after subtitle move.");
+                    }
+                    catch (Exception ex)
+                    {
+                        AppendLog($"[ERROR] Failed to refresh Jellyfin library: {ex.Message}");
+                    }
+                }
+
+                StatusMessage = allSucceeded ? "All path tasks completed." : "Path tasks completed with failures.";
+                if (ShutdownWhenComplete)
+                {
+                    AppendLog("System shutdown requested after task queue completion.");
+                    var shutdownStartInfo = new ProcessStartInfo("shutdown.exe", "/s /t 0") { UseShellExecute = false, CreateNoWindow = true };
+                    AppendLog($"Command: {CommandBuilder.FormatCommand(shutdownStartInfo)}");
+                    Process.Start(shutdownStartInfo);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Failed to prepare command: {ex.Message}";
+            SelectedTabIndex = 1;
+            AppendLog($"[ERROR] {ex.Message}");
+        }
+        finally
+        {
+            lock (_executionLock)
+            {
+                _activeProcess = null;
+                _activeJob = null;
+            }
+            IsExecuting = false;
+            IsStopping = false;
+            GenerateCommand.RaiseCanExecuteChanged();
+            RetryFailedTranslationCommand.RaiseCanExecuteChanged();
+            StopCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    private async Task RetryFailedTranslationsAsync()
+    {
+        List<MediaPathTask> tasks;
+        lock (_retryQueueLock)
+        {
+            tasks = _failedTranslationTasks
+                .Select(task => new MediaPathTask(task.ItemId, task.MediaName, task.MediaPath))
+                .ToList();
+        }
+        if (tasks.Count == 0) return;
+
+        IsExecuting = true;
+        IsStopping = false;
+        GenerateCommand.RaiseCanExecuteChanged();
+        RetryFailedTranslationCommand.RaiseCanExecuteChanged();
+        StopCommand.RaiseCanExecuteChanged();
+
+        try
+        {
+            var validationStartInfo = CommandBuilder.BuildTranslateStartInfo(GetTranscriptionSubtitlePath(tasks[0].Path), _settings.WhisperJavTranslate);
+            if (!File.Exists(validationStartInfo.FileName))
+                throw new FileNotFoundException("Subtitle translation executable was not found.", validationStartInfo.FileName);
+
+            SelectedTabIndex = 1;
+            AppendLog($"Retrying all failed translation tasks: {tasks.Count}.");
+            var allSucceeded = true;
+            var subtitleMoved = false;
+            for (var taskIndex = 0; taskIndex < tasks.Count; taskIndex++)
+            {
+                if (IsStopping) break;
+
+                var task = tasks[taskIndex];
+                if (!await ExecuteSubtitleTranslationAsync(task, taskIndex + 1, tasks.Count))
+                {
+                    allSucceeded = false;
+                    continue;
+                }
+                if (IsStopping) break;
+
+                var seconvResult = await ExecuteSeconvCommandsAsync([task.Path]);
+                allSucceeded &= seconvResult.AllSucceeded;
+                subtitleMoved |= seconvResult.SubtitleCopied;
+                if (seconvResult.AllSucceeded) RemoveTranslationRetryTask(task.Path);
+            }
+
+            if (IsStopping)
+            {
+                AppendLog("Failed translation retry queue stopped.");
+                StatusMessage = "Failed translation retry queue stopped.";
+            }
+            else
+            {
+                if (subtitleMoved && _client is not null && !string.IsNullOrWhiteSpace(SelectedLibraryId))
+                {
+                    try
+                    {
+                        await _client.RefreshLibraryAsync(SelectedLibraryId);
+                        AppendLog("Jellyfin library refresh requested after subtitle move.");
+                    }
+                    catch (Exception ex)
+                    {
+                        AppendLog($"[ERROR] Failed to refresh Jellyfin library: {ex.Message}");
+                    }
+                }
+
+                StatusMessage = allSucceeded ? "All failed translation tasks completed." : "Failed translation retry completed with failures.";
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Failed to prepare failed-translation retry: {ex.Message}";
+            SelectedTabIndex = 1;
+            AppendLog($"[ERROR] {ex.Message}");
+        }
+        finally
+        {
+            lock (_executionLock)
+            {
+                _activeProcess = null;
+                _activeJob = null;
+            }
+            IsExecuting = false;
+            IsStopping = false;
+            GenerateCommand.RaiseCanExecuteChanged();
+            RetryFailedTranslationCommand.RaiseCanExecuteChanged();
+            StopCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    private async Task<bool> ExecuteWhisperJavAsync(MediaPathTask task, int taskIndex, int taskCount)
+    {
+        try
+        {
+            var startInfo = CommandBuilder.BuildStartInfo([task.Path], _settings.WhisperJav);
+            AppendLog($"Running WhisperJav ({taskIndex}/{taskCount}): {task.Path}");
+            AppendLog($"Command: {CommandBuilder.FormatCommand(startInfo)}");
+            using var job = new ProcessJob();
+            using var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
+            process.OutputDataReceived += (_, e) => { if (e.Data is not null) AppendLog(e.Data); };
+            process.ErrorDataReceived += (_, e) => { if (e.Data is not null) AppendLog($"[stderr] {e.Data}"); };
+
+            if (!process.Start()) throw new InvalidOperationException("Unable to start WhisperJav process.");
+            try
+            {
+                job.Add(process);
+            }
+            catch
+            {
+                await StopProcessTreeAsync(process.Id);
+                throw;
+            }
+
+            lock (_executionLock)
+            {
+                _activeProcess = process;
+                _activeJob = job;
+            }
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+            StatusMessage = $"Running WhisperJav ({taskIndex}/{taskCount}): {Path.GetFileName(task.Path)}";
+            await process.WaitForExitAsync();
+
+            if (IsStopping) return false;
+            if (process.ExitCode == 0)
+            {
+                AppendLog($"WhisperJav succeeded ({taskIndex}/{taskCount}): {task.Path}");
+                return true;
+            }
+
+            var failure = $"WhisperJav exited with code {process.ExitCode}.";
+            AppendLog($"[ERROR] {failure} Continuing with the next path.");
+            AppendWhisperJavFailure(task, failure);
+            return false;
+        }
+        catch (Exception ex)
+        {
+            if (IsStopping) return false;
+            var failure = $"WhisperJav threw an exception: {ex.Message}";
+            AppendLog($"[ERROR] {failure} Continuing with the next path.");
+            AppendWhisperJavFailure(task, failure);
+            return false;
+        }
+        finally
+        {
+            lock (_executionLock)
+            {
+                _activeProcess = null;
+                _activeJob = null;
+            }
+        }
+    }
+
+    private async Task<bool> ExecuteSubtitleTranslationAsync(MediaPathTask task, int taskIndex, int taskCount)
+    {
+        var transcriptionSubtitlePath = GetTranscriptionSubtitlePath(task.Path);
+        if (!File.Exists(transcriptionSubtitlePath))
+        {
+            AppendLog($"[ERROR] Transcription subtitle was not found: {transcriptionSubtitlePath}. Skipping Seconv for this path.");
+            return false;
+        }
+
+        try
+        {
+            var startInfo = CommandBuilder.BuildTranslateStartInfo(transcriptionSubtitlePath, _settings.WhisperJavTranslate);
+            AppendLog($"Running subtitle translation ({taskIndex}/{taskCount}): {transcriptionSubtitlePath}");
+            AppendLog($"Command: {CommandBuilder.FormatCommand(startInfo)}");
+            using var job = new ProcessJob();
+            using var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
+            var translationCompletionState = 0;
+            void CaptureTranslationCompletion(string line)
+            {
+                if (line.Contains("All subtitles translated: YES", StringComparison.OrdinalIgnoreCase))
+                    Interlocked.Exchange(ref translationCompletionState, 1);
+                else if (line.Contains("All subtitles translated: NO", StringComparison.OrdinalIgnoreCase))
+                    Interlocked.Exchange(ref translationCompletionState, -1);
+            }
+            process.OutputDataReceived += (_, e) =>
+            {
+                if (e.Data is null) return;
+                AppendLog(e.Data);
+                CaptureTranslationCompletion(e.Data);
+            };
+            process.ErrorDataReceived += (_, e) =>
+            {
+                if (e.Data is null) return;
+                AppendLog($"[stderr] {e.Data}");
+                CaptureTranslationCompletion(e.Data);
+            };
+
+            if (!process.Start()) throw new InvalidOperationException("Unable to start subtitle translation process.");
+            try
+            {
+                job.Add(process);
+            }
+            catch
+            {
+                await StopProcessTreeAsync(process.Id);
+                throw;
+            }
+
+            lock (_executionLock)
+            {
+                _activeProcess = process;
+                _activeJob = job;
+            }
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+            StatusMessage = $"Translating subtitles ({taskIndex}/{taskCount}): {Path.GetFileName(task.Path)}";
+            await process.WaitForExitAsync();
+            process.WaitForExit();
+
+            if (IsStopping) return false;
+            if (process.ExitCode == 0 && Volatile.Read(ref translationCompletionState) == 1)
+            {
+                AppendLog($"Subtitle translation succeeded ({taskIndex}/{taskCount}): {transcriptionSubtitlePath}");
+                return true;
+            }
+
+            var failure = process.ExitCode == 0
+                ? "Subtitle translation reported incomplete subtitles (All subtitles translated: NO or no completion marker)."
+                : $"Subtitle translation exited with code {process.ExitCode}.";
+            AppendLog($"[ERROR] {failure} Skipping Seconv for this path.");
+            RecordTranslationFailure(task, failure);
+            return false;
+        }
+        catch (Exception ex)
+        {
+            if (IsStopping) return false;
+            var failure = $"Subtitle translation failed: {ex.Message}";
+            AppendLog($"[ERROR] {failure}. Skipping Seconv for this path.");
+            RecordTranslationFailure(task, failure);
+            return false;
+        }
+        finally
+        {
+            lock (_executionLock)
+            {
+                _activeProcess = null;
+                _activeJob = null;
+            }
+        }
+    }
+
+    private void RecordTranslationFailure(MediaPathTask task, string failure)
+    {
+        lock (_retryQueueLock)
+        {
+            _failedTranslationTasks.RemoveAll(existing => string.Equals(existing.MediaPath, task.Path, StringComparison.OrdinalIgnoreCase));
+            _failedTranslationTasks.Add(new TranslationRetryTask(task.ItemId, task.MediaName, task.Path, DateTime.Now, failure));
+            SaveTranslationRetryTasks();
+        }
+        RefreshTranslationRetryQueueState();
+    }
+
+    private void RemoveTranslationRetryTask(string mediaPath)
+    {
+        lock (_retryQueueLock)
+        {
+            if (_failedTranslationTasks.RemoveAll(task => string.Equals(task.MediaPath, mediaPath, StringComparison.OrdinalIgnoreCase)) == 0)
+                return;
+            SaveTranslationRetryTasks();
+        }
+        RefreshTranslationRetryQueueState();
+    }
+
+    private void SaveTranslationRetryTasks()
+    {
+        try
+        {
+            SettingsStore.SaveTranslationRetryTasks(_failedTranslationTasks);
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"[ERROR] Failed to save translation retry queue: {ex.Message}");
+        }
+    }
+
+    private void RefreshTranslationRetryQueueState()
+    {
+        RaisePropertyChanged(nameof(RetryFailedTranslationButtonText));
+        RetryFailedTranslationCommand.RaiseCanExecuteChanged();
+    }
+
+    private string GetTranscriptionSubtitlePath(string mediaPath)
+    {
+        var mediaName = Path.GetFileNameWithoutExtension(mediaPath);
+        if (string.IsNullOrWhiteSpace(mediaName))
+            throw new InvalidOperationException($"Invalid media path: {mediaPath}");
+
+        return Path.Combine(_settings.WhisperJav.OutputDir, $"{mediaName}.ja.merged.whisperjav.srt");
+    }
+
+    private void AppendWhisperJavFailure(MediaPathTask task, string reason)
+    {
+        var entry = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] ItemId: {task.ItemId}{Environment.NewLine}" +
+                    $"MediaName: {task.MediaName}{Environment.NewLine}" +
+                    $"Path: {task.Path}{Environment.NewLine}" +
+                    $"Reason: {reason}{Environment.NewLine}{Environment.NewLine}";
+        lock (_logLock)
+        {
+            try
+            {
+                File.AppendAllText(_failedWhisperJavLogFilePath, entry, Encoding.UTF8);
+            }
+            catch
+            {
+                // Failure-task logging must not prevent the remaining queue from running.
+            }
+        }
+    }
+
+    private readonly record struct MediaPathTask(string ItemId, string MediaName, string Path);
+
+    private async Task ExecuteLegacyAsync()
+    {
+        if (_client is null) return;
+        IsExecuting = true;
+        IsStopping = false;
+        GenerateCommand.RaiseCanExecuteChanged();
         StopCommand.RaiseCanExecuteChanged();
         try
         {
@@ -184,6 +631,7 @@ public sealed class MainViewModel : ObservableObject
             AppendLog($"执行文件: {startInfo.FileName}");
             AppendLog($"工作目录: {startInfo.WorkingDirectory}");
             AppendLog($"媒体数量: {paths.Count}");
+            AppendLog($"Command: {CommandBuilder.FormatCommand(startInfo)}");
             using var job = new ProcessJob();
             using var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
             process.OutputDataReceived += (_, e) => { if (e.Data is not null) AppendLog(e.Data); };
@@ -236,10 +684,12 @@ public sealed class MainViewModel : ObservableObject
                     }
                     if (seconvResult.AllSucceeded) StatusMessage = "所有命令执行完成。";
                 }
-            if (ShutdownWhenComplete)
+                if (ShutdownWhenComplete)
                 {
                     AppendLog("已启用执行完后关机，正在请求系统关机。");
-                    Process.Start(new ProcessStartInfo("shutdown.exe", "/s /t 0") { UseShellExecute = false, CreateNoWindow = true });
+                    var shutdownStartInfo = new ProcessStartInfo("shutdown.exe", "/s /t 0") { UseShellExecute = false, CreateNoWindow = true };
+                    AppendLog($"Command: {CommandBuilder.FormatCommand(shutdownStartInfo)}");
+                    Process.Start(shutdownStartInfo);
                 }
             }
         }
@@ -290,6 +740,7 @@ public sealed class MainViewModel : ObservableObject
                     throw new FileNotFoundException("未找到 Seconv 可执行文件，请检查 appsettings.json 中 Seconv.ExecutablePath。", startInfo.FileName);
 
                 AppendLog($"执行 Seconv（{attempt}/{repeatCount}）：{mediaPath}");
+                AppendLog($"Command: {CommandBuilder.FormatCommand(startInfo)}");
                 using var job = new ProcessJob();
                 using var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
                 process.OutputDataReceived += (_, e) => { if (e.Data is not null) AppendLog(e.Data); };
@@ -349,13 +800,13 @@ public sealed class MainViewModel : ObservableObject
             }
             try
             {
-                File.Copy(sourceSubtitlePath, destinationSubtitlePath, overwrite: true);
-                AppendLog($"已复制转换后的字幕: {destinationSubtitlePath}");
+                File.Move(sourceSubtitlePath, destinationSubtitlePath, overwrite: true);
+                AppendLog($"已移动转换后的字幕: {destinationSubtitlePath}");
                 subtitleCopied = true;
             }
             catch (Exception ex)
             {
-                AppendLog($"[错误] 无法复制字幕到媒体目录: {destinationSubtitlePath}。{ex.Message} 将继续处理其他媒体。");
+                AppendLog($"[错误] 无法移动字幕到媒体目录: {destinationSubtitlePath}。{ex.Message} 将继续处理其他媒体。");
                 allSucceeded = false;
                 continue;
             }
@@ -383,7 +834,15 @@ public sealed class MainViewModel : ObservableObject
             process = _activeProcess;
         }
 
-        if (process is null || process.HasExited) return;
+        if (process is null) return;
+        try
+        {
+            if (process.HasExited) return;
+        }
+        catch (InvalidOperationException)
+        {
+            return;
+        }
         IsStopping = true;
         StopCommand.RaiseCanExecuteChanged();
         AppendLog("正在终止任务及其子进程...");
@@ -408,7 +867,7 @@ public sealed class MainViewModel : ObservableObject
         }
     }
 
-    private static async Task StopProcessTreeAsync(int processId)
+    private async Task StopProcessTreeAsync(int processId)
     {
         using var taskKill = new Process
         {
@@ -423,6 +882,7 @@ public sealed class MainViewModel : ObservableObject
         taskKill.StartInfo.ArgumentList.Add(processId.ToString());
         taskKill.StartInfo.ArgumentList.Add("/T");
         taskKill.StartInfo.ArgumentList.Add("/F");
+        AppendLog($"Command: {CommandBuilder.FormatCommand(taskKill.StartInfo)}");
         if (!taskKill.Start()) throw new InvalidOperationException("Unable to start taskkill.");
         await taskKill.WaitForExitAsync();
         if (taskKill.ExitCode != 0) throw new InvalidOperationException($"taskkill 退出码: {taskKill.ExitCode}。");

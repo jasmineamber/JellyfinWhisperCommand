@@ -23,4 +23,17 @@ public static class SettingsStore
 
     public static void SaveUserSettings(UserSettings settings) =>
         File.WriteAllText(Path.Combine(AppDirectory, "user-settings.json"), JsonSerializer.Serialize(settings, JsonOptions));
+
+    public static List<TranslationRetryTask> LoadTranslationRetryTasks()
+    {
+        var path = Path.Combine(AppDirectory, "failed-translation-tasks.json");
+        return File.Exists(path)
+            ? JsonSerializer.Deserialize<List<TranslationRetryTask>>(File.ReadAllText(path), JsonOptions) ?? []
+            : [];
+    }
+
+    public static void SaveTranslationRetryTasks(IEnumerable<TranslationRetryTask> tasks) =>
+        File.WriteAllText(
+            Path.Combine(AppDirectory, "failed-translation-tasks.json"),
+            JsonSerializer.Serialize(tasks, JsonOptions));
 }
