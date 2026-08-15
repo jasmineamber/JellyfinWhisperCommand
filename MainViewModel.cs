@@ -824,6 +824,13 @@ public sealed class MainViewModel : ObservableObject
 
     private readonly record struct SeconvResult(bool AllSucceeded, bool SubtitleCopied);
 
+    public async Task StopExecutionAndWaitAsync()
+    {
+        await StopAsync();
+        while (IsExecuting)
+            await Task.Delay(50);
+    }
+
     private async Task StopAsync()
     {
         ProcessJob? job;
@@ -834,7 +841,15 @@ public sealed class MainViewModel : ObservableObject
             process = _activeProcess;
         }
 
-        if (process is null) return;
+        if (!IsExecuting || IsStopping) return;
+        IsStopping = true;
+        StopCommand.RaiseCanExecuteChanged();
+
+        if (process is null)
+        {
+            AppendLog("Cancellation requested; the task will stop after the current preparation step.");
+            return;
+        }
         try
         {
             if (process.HasExited) return;
