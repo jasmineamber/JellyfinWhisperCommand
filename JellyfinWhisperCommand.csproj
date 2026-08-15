@@ -8,7 +8,11 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="NLog.WPF" Version="1.3.0" />
+  </ItemGroup>
+  <ItemGroup>
     <Resource Include="app-icon.ico" />
     <None Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="nlog.config" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

@@ -1,6 +1,7 @@
 <Window x:Class="JellyfinWhisperCommand.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:nlog="clr-namespace:NLog.WPF;assembly=NLog.WPF"
         Title="Jellyfin Whisper 命令执行器" Icon="app-icon.ico" Height="820" Width="1200" MinHeight="600" MinWidth="850"
         Background="#F6F7F9"
         Closing="Window_Closing">
@@ -160,9 +161,7 @@
             </Button>
           </StackPanel>
           <Border Grid.Row="2" Background="#171A1F" BorderBrush="#2B313A" BorderThickness="1" CornerRadius="4" Padding="12">
-            <TextBox x:Name="LogTextBox" Text="{Binding LogText, Mode=OneWay}" IsReadOnly="True" BorderThickness="0" Background="Transparent" Foreground="#D6E1EF"
-                     FontFamily="Cascadia Mono, Consolas" FontSize="13" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
-                     HorizontalScrollBarVisibility="Auto" AcceptsReturn="True" Loaded="LogTextBox_Loaded" TextChanged="LogTextBox_TextChanged" />
+            <nlog:NlogRichTextBox x:Name="LogTextBox" MaxRowCount="0" />
           </Border>
         </Grid>
       </TabItem>

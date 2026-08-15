@@ -3,14 +3,12 @@ namespace JellyfinWhisperCommand;
 public sealed class MainViewModel : ObservableObject
 {
     private const int PageSize = 100;
+    private static readonly NLog.Logger _logger = NLog.LogManager.GetCurrentClassLogger();
     private readonly AppSettings _settings;
     private readonly UserSettings _userSettings;
     private readonly JellyfinClient? _client;
-    private readonly Dispatcher _dispatcher;
-    private readonly string _logFilePath = Path.Combine(AppContext.BaseDirectory, "execution.log");
     private readonly string _failedWhisperJavLogFilePath = Path.Combine(AppContext.BaseDirectory, "failed-whisperjav-tasks.log");
     private readonly List<TranslationRetryTask> _failedTranslationTasks;
-    // Keeps the log file and the UI dispatcher queue in the same order.
     private readonly object _logLock = new();
     private readonly object _executionLock = new();
     private readonly object _taskQueueLock = new();
@@ -31,7 +29,6 @@ public sealed class MainViewModel : ObservableObject
     private bool _isStopping;
     private bool _shutdownWhenComplete;
     private int _selectedTabIndex;
-    private string _logText = "等待执行命令。";
 
     public ObservableCollection<MediaLibrary> Libraries { get; } = [];
     public ObservableCollection<MediaItem> MediaItems { get; } = [];
@@ -58,7 +55,6 @@ public sealed class MainViewModel : ObservableObject
     public bool IsStopping { get => _isStopping; private set => SetProperty(ref _isStopping, value); }
     public bool ShutdownWhenComplete { get => _shutdownWhenComplete; set => SetProperty(ref _shutdownWhenComplete, value); }
     public int SelectedTabIndex { get => _selectedTabIndex; set => SetProperty(ref _selectedTabIndex, value); }
-    public string LogText { get => _logText; private set => SetProperty(ref _logText, value); }
     public bool CanGoPrevious => _pageIndex > 0;
     public bool CanGoNext => (_pageIndex + 1) * PageSize < _totalCount;
     public string RetryFailedTranslationButtonText
@@ -87,7 +83,6 @@ public sealed class MainViewModel : ObservableObject
 
     public MainViewModel()
     {
-        _dispatcher = Dispatcher.CurrentDispatcher;
         _userSettings = SettingsStore.LoadUserSettings();
         try
         {
@@ -1105,22 +1100,7 @@ public sealed class MainViewModel : ObservableObject
 
     private void AppendLog(string message)
     {
-        var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}";
-        lock (_logLock)
-        {
-            try
-            {
-                File.AppendAllText(_logFilePath, line + Environment.NewLine, Encoding.UTF8);
-            }
-            catch
-            {
-                // Logging must not interrupt the command when the log file cannot be written.
-            }
-
-            // Always enqueue, including calls made on the UI thread. This prevents direct
-            // UI updates from overtaking earlier background-process output.
-            _dispatcher.BeginInvoke(() => LogText += Environment.NewLine + line);
-        }
+        _logger.Info(message);
     }
 
     private void RefreshPaging()
