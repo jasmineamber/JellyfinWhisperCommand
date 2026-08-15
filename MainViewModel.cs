@@ -13,8 +13,11 @@ public sealed class MainViewModel : ObservableObject
     // Keeps the log file and the UI dispatcher queue in the same order.
     private readonly object _logLock = new();
     private readonly object _executionLock = new();
+    private readonly object _taskQueueLock = new();
     private readonly object _retryQueueLock = new();
     private readonly HashSet<string> _selectedIds = [];
+    private readonly Queue<MediaPathTask> _taskQueue = new();
+    private readonly HashSet<string> _queuedMediaIds = new(StringComparer.OrdinalIgnoreCase);
     private Process? _activeProcess;
     private ProcessJob? _activeJob;
     private string? _selectedLibraryId;
@@ -66,7 +69,14 @@ public sealed class MainViewModel : ObservableObject
         }
     }
     public string PageText => _totalCount == 0 ? "第 0 / 0 页" : $"第 {_pageIndex + 1} / {Math.Ceiling(_totalCount / (double)PageSize)} 页";
-    public string SelectionSummary => $"已选择 {_selectedIds.Count} 个媒体";
+    public string SelectionSummary
+    {
+        get
+        {
+            lock (_taskQueueLock)
+                return $"已选择 {_selectedIds.Count} 个媒体，队列中 {_taskQueue.Count} 个任务";
+        }
+    }
 
     public AsyncRelayCommand SearchCommand { get; }
     public AsyncRelayCommand GenerateCommand { get; }
@@ -99,7 +109,7 @@ public sealed class MainViewModel : ObservableObject
         }
 
         SearchCommand = new AsyncRelayCommand(SearchAsync, () => _client is not null && !string.IsNullOrWhiteSpace(SelectedLibraryId));
-        GenerateCommand = new AsyncRelayCommand(ExecuteAsync, () => _client is not null && _selectedIds.Count > 0 && !IsExecuting);
+        GenerateCommand = new AsyncRelayCommand(ExecuteAsync, () => _client is not null && _selectedIds.Count > 0);
         RetryFailedTranslationCommand = new AsyncRelayCommand(RetryFailedTranslationsAsync, () => _failedTranslationTasks.Count > 0 && !IsExecuting);
         StopCommand = new AsyncRelayCommand(StopAsync, () => IsExecuting && !IsStopping);
         PreviousPageCommand = new AsyncRelayCommand(async () => { _pageIndex--; await LoadPageAsync(); }, () => CanGoPrevious);
@@ -142,18 +152,26 @@ public sealed class MainViewModel : ObservableObject
         StatusMessage = "正在查询媒体...";
         try
         {
-            var response = await _client.GetItemsAsync(SelectedLibraryId, SelectedSort, HasSubtitles, _pageIndex * PageSize, PageSize);
+            var response = await _client!.GetItemsAsync(SelectedLibraryId, SelectedSort, HasSubtitles, _pageIndex * PageSize, PageSize);
+            string[] queuedMediaIds;
+            lock (_taskQueueLock)
+                queuedMediaIds = _queuedMediaIds.ToArray();
+
+            var filteredItems = response.Items
+                .Where(item => !queuedMediaIds.Contains(item.Id, StringComparer.OrdinalIgnoreCase))
+                .ToList();
+
             foreach (var oldItem in MediaItems) oldItem.PropertyChanged -= OnMediaItemPropertyChanged;
             MediaItems.Clear();
-            foreach (var item in response.Items)
+            foreach (var item in filteredItems)
             {
-                var media = new MediaItem { Id = item.Id, Name = item.Name, ImageUrl = _client.GetImageUrl(item), IsSelected = _selectedIds.Contains(item.Id) };
+                var media = new MediaItem { Id = item.Id, Name = item.Name, ImageUrl = _client!.GetImageUrl(item), IsSelected = _selectedIds.Contains(item.Id) };
                 media.PropertyChanged += OnMediaItemPropertyChanged;
                 MediaItems.Add(media);
             }
             _totalCount = response.TotalRecordCount;
             IsStatusVisible = MediaItems.Count == 0;
-            StatusMessage = "没有符合筛选条件的媒体。";
+            StatusMessage = MediaItems.Count == 0 ? "没有符合筛选条件的媒体。" : $"找到 {MediaItems.Count} 个媒体。";
             RefreshPaging();
         }
         catch (Exception ex)
@@ -177,69 +195,182 @@ public sealed class MainViewModel : ObservableObject
     private async Task ExecuteAsync()
     {
         if (_client is null) return;
-        IsExecuting = true;
-        IsStopping = false;
+
+        var selectedIds = _selectedIds.ToList();
+        if (selectedIds.Count == 0) return;
+
+        var queuedCount = 0;
+        IsStatusVisible = true;
+        StatusMessage = "正在将所选媒体加入任务队列...";
+        AppendLog($"Adding {selectedIds.Count} selected media item(s) to the task queue.");
+
+        foreach (var itemId in selectedIds)
+        {
+            var mediaName = MediaItems.FirstOrDefault(item => item.Id == itemId)?.Name ?? itemId;
+            lock (_taskQueueLock)
+            {
+                if (!_queuedMediaIds.Add(itemId))
+                {
+                    AppendLog($"[QUEUE] Skip duplicate media: {mediaName} ({itemId})");
+                    continue;
+                }
+            }
+            RaisePropertyChanged(nameof(SelectionSummary));
+            AppendLog($"[QUEUE] Adding media: {mediaName} ({itemId})");
+
+            try
+            {
+                var itemPaths = await _client.GetPathsAsync(itemId);
+                if (itemPaths.Count == 0)
+                {
+                    lock (_taskQueueLock)
+                        _queuedMediaIds.Remove(itemId);
+                    AppendLog($"[QUEUE][ERROR] Media has no usable paths: {mediaName} ({itemId})");
+                    RaisePropertyChanged(nameof(SelectionSummary));
+                    continue;
+                }
+
+                lock (_taskQueueLock)
+                {
+                    foreach (var path in itemPaths)
+                    {
+                        _taskQueue.Enqueue(new MediaPathTask(itemId, mediaName, path));
+                        AppendLog($"[QUEUE]   Added path: {path}");
+                    }
+                    queuedCount++;
+                }
+                AppendLog($"[QUEUE] Media added: {mediaName} ({itemPaths.Count} path task(s)); queue size: {GetQueueTaskCount()} path task(s), {GetQueuedMediaCount()} media item(s)");
+            }
+            catch (Exception ex)
+            {
+                lock (_taskQueueLock)
+                    _queuedMediaIds.Remove(itemId);
+                RaisePropertyChanged(nameof(SelectionSummary));
+                AppendLog($"[QUEUE][ERROR] Failed to add media: {mediaName} ({itemId}). {ex.Message}");
+            }
+        }
+
+        _selectedIds.Clear();
+        foreach (var item in MediaItems) item.IsSelected = false;
+        RaisePropertyChanged(nameof(SelectionSummary));
+        GenerateCommand.RaiseCanExecuteChanged();
+
+        AppendLog(queuedCount > 0
+            ? $"Added {queuedCount} media item(s) to the task queue."
+            : "No new media item was added to the task queue.");
+
+        bool startWorker;
+        lock (_executionLock)
+        {
+            startWorker = !IsExecuting;
+            if (startWorker)
+            {
+                IsExecuting = true;
+                IsStopping = false;
+            }
+        }
+
+        AppendLog($"[QUEUE] Enqueue operation completed: {queuedCount} new media item(s), {GetQueueTaskCount()} path task(s) waiting, {GetQueuedMediaCount()} media item(s) tracked.");
+        if (startWorker)
+        {
+            AppendLog("[QUEUE] Starting queue worker.");
+            _ = ProcessTaskQueueAsync();
+        }
+        else
+        {
+            StatusMessage = $"已加入队列 {queuedCount} 个媒体，当前任务继续执行。";
+            AppendLog($"[QUEUE] Existing queue worker is active; new tasks will be processed after the current task(s). Remaining: {GetQueueTaskCount()} path task(s).");
+        }
+    }
+
+    private async Task ProcessTaskQueueAsync()
+    {
+        lock (_executionLock)
+            IsStopping = false;
+
         GenerateCommand.RaiseCanExecuteChanged();
         RetryFailedTranslationCommand.RaiseCanExecuteChanged();
         StopCommand.RaiseCanExecuteChanged();
+
+        var allSucceeded = true;
+        var subtitleMoved = false;
+
         try
         {
-            IsStatusVisible = true;
-            var selectedIds = _selectedIds.ToList();
-            var tasks = new List<MediaPathTask>();
-            AppendLog($"Preparing {selectedIds.Count} selected media item(s).");
-            foreach (var itemId in selectedIds)
-            {
-                var itemPaths = await _client.GetPathsAsync(itemId);
-                var mediaName = MediaItems.FirstOrDefault(item => item.Id == itemId)?.Name ?? itemId;
-                tasks.AddRange(itemPaths.Select(path => new MediaPathTask(itemId, mediaName, path)));
-            }
+            var firstTask = GetNextQueuedTask();
+            if (firstTask is null) return;
 
-            if (tasks.Count == 0)
-                throw new InvalidOperationException("The selected media items have no usable paths.");
-
-            var validationStartInfo = CommandBuilder.BuildStartInfo([tasks[0].Path], _settings.WhisperJav);
+            var validationStartInfo = CommandBuilder.BuildStartInfo([firstTask.Value.Path], _settings.WhisperJav);
             if (!File.Exists(validationStartInfo.FileName))
             {
                 const string failure = "WhisperJav executable was not found.";
-                foreach (var task in tasks) AppendWhisperJavFailure(task, failure);
-                throw new FileNotFoundException("WhisperJav executable was not found.", validationStartInfo.FileName);
+                foreach (var queuedTask in GetQueuedTasksSnapshot()) AppendWhisperJavFailure(queuedTask, failure);
+                throw new FileNotFoundException(failure, validationStartInfo.FileName);
             }
 
             SelectedTabIndex = 1;
             AppendLog($"WhisperJav executable: {validationStartInfo.FileName}");
-            AppendLog($"Path tasks to run: {tasks.Count}");
-            var allSucceeded = true;
-            var subtitleMoved = false;
 
-            for (var taskIndex = 0; taskIndex < tasks.Count; taskIndex++)
+            while (true)
             {
-                if (IsStopping) break;
+                MediaPathTask currentTask;
+                lock (_executionLock)
+                lock (_taskQueueLock)
+                {
+                    if (IsStopping || _taskQueue.Count == 0)
+                    {
+                        if (_taskQueue.Count == 0)
+                            AppendLog($"[QUEUE] Queue worker has no pending tasks. Tracked media: {_queuedMediaIds.Count}.");
+                        break;
+                    }
+                    currentTask = _taskQueue.Dequeue();
+                }
 
-                var task = tasks[taskIndex];
-                if (!await ExecuteWhisperJavAsync(task, taskIndex + 1, tasks.Count))
+                AppendLog($"[QUEUE] Dequeued media: {currentTask.MediaName} ({currentTask.ItemId})");
+                AppendLog($"[QUEUE] Starting path task: {currentTask.Path}; remaining: {GetQueueTaskCount()} path task(s), {GetQueuedMediaCount()} media item(s) tracked.");
+
+                var taskSucceeded = false;
+                if (!await ExecuteWhisperJavAsync(currentTask, 1, 1))
                 {
                     allSucceeded = false;
-                    continue;
+                    AppendLog($"[QUEUE][FAILED] WhisperJav failed: {currentTask.Path}");
                 }
-                if (IsStopping) break;
-
-                if (!await ExecuteSubtitleTranslationAsync(task, taskIndex + 1, tasks.Count))
+                else if (IsStopping)
+                {
+                    AppendLog($"[QUEUE][STOPPING] Current task interrupted after WhisperJav: {currentTask.Path}");
+                }
+                else if (!await ExecuteSubtitleTranslationAsync(currentTask, 1, 1))
                 {
                     allSucceeded = false;
-                    continue;
+                    AppendLog($"[QUEUE][FAILED] Translation failed: {currentTask.Path}");
                 }
-                if (IsStopping) break;
+                else if (IsStopping)
+                {
+                    AppendLog($"[QUEUE][STOPPING] Current task interrupted after translation: {currentTask.Path}");
+                }
+                else
+                {
+                    var seconvResult = await ExecuteSeconvCommandsAsync([currentTask.Path]);
+                    allSucceeded &= seconvResult.AllSucceeded;
+                    subtitleMoved |= seconvResult.SubtitleCopied;
+                    taskSucceeded = seconvResult.AllSucceeded;
+                    if (seconvResult.AllSucceeded) RemoveTranslationRetryTask(currentTask.Path);
+                    if (!seconvResult.AllSucceeded)
+                        AppendLog($"[QUEUE][FAILED] Seconv/post-processing failed: {currentTask.Path}");
+                }
 
-                var seconvResult = await ExecuteSeconvCommandsAsync([task.Path]);
-                allSucceeded &= seconvResult.AllSucceeded;
-                subtitleMoved |= seconvResult.SubtitleCopied;
-                if (seconvResult.AllSucceeded) RemoveTranslationRetryTask(task.Path);
+                ReleaseQueuedMediaIdIfFinished(currentTask.ItemId);
+                AppendLog(taskSucceeded
+                    ? $"[QUEUE][COMPLETED] Path task completed: {currentTask.Path}; remaining: {GetQueueTaskCount()} path task(s), {GetQueuedMediaCount()} media item(s) tracked."
+                    : $"[QUEUE] Path task finished with failure/interruption: {currentTask.Path}; remaining: {GetQueueTaskCount()} path task(s), {GetQueuedMediaCount()} media item(s) tracked.");
             }
 
             if (IsStopping)
             {
-                AppendLog("Task queue stopped.");
+                var pendingPathCount = GetQueueTaskCount();
+                var pendingMediaCount = GetQueuedMediaCount();
+                ClearPendingTaskQueue();
+                AppendLog($"[QUEUE][STOPPED] Queue worker stopped; discarded {pendingPathCount} pending path task(s) across {pendingMediaCount} media item(s).");
                 StatusMessage = "Task queue stopped.";
             }
             else
@@ -248,7 +379,7 @@ public sealed class MainViewModel : ObservableObject
                 {
                     try
                     {
-                        await _client.RefreshLibraryAsync(SelectedLibraryId);
+                        await _client!.RefreshLibraryAsync(SelectedLibraryId);
                         AppendLog("Jellyfin library refresh requested after subtitle move.");
                     }
                     catch (Exception ex)
@@ -257,7 +388,7 @@ public sealed class MainViewModel : ObservableObject
                     }
                 }
 
-                StatusMessage = allSucceeded ? "All path tasks completed." : "Path tasks completed with failures.";
+                StatusMessage = allSucceeded ? "All queued path tasks completed." : "Queued path tasks completed with failures.";
                 if (ShutdownWhenComplete)
                 {
                     AppendLog("System shutdown requested after task queue completion.");
@@ -269,23 +400,92 @@ public sealed class MainViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Failed to prepare command: {ex.Message}";
+            ClearPendingTaskQueue();
+            StatusMessage = $"Failed to process task queue: {ex.Message}";
             SelectedTabIndex = 1;
             AppendLog($"[ERROR] {ex.Message}");
         }
         finally
         {
+            bool restartWorker;
             lock (_executionLock)
             {
                 _activeProcess = null;
                 _activeJob = null;
+                restartWorker = !IsStopping && GetQueueTaskCount() > 0;
+                if (!restartWorker)
+                {
+                    IsExecuting = false;
+                    IsStopping = false;
+                }
             }
-            IsExecuting = false;
-            IsStopping = false;
+
+            RaisePropertyChanged(nameof(SelectionSummary));
             GenerateCommand.RaiseCanExecuteChanged();
             RetryFailedTranslationCommand.RaiseCanExecuteChanged();
             StopCommand.RaiseCanExecuteChanged();
+
+            if (restartWorker)
+            {
+                AppendLog($"[QUEUE] Tasks were added while the worker was finishing; restarting worker with {GetQueueTaskCount()} pending path task(s).");
+                _ = ProcessTaskQueueAsync();
+            }
+            else
+            {
+                AppendLog($"[QUEUE] Queue worker exited. Pending path tasks: {GetQueueTaskCount()}, tracked media: {GetQueuedMediaCount()}.");
+            }
         }
+    }
+
+    private MediaPathTask? GetNextQueuedTask()
+    {
+        lock (_taskQueueLock)
+            return _taskQueue.Count == 0 ? null : _taskQueue.Peek();
+    }
+
+    private MediaPathTask? DequeueNextTask()
+    {
+        lock (_taskQueueLock)
+            return _taskQueue.Count == 0 ? null : _taskQueue.Dequeue();
+    }
+
+    private int GetQueueTaskCount()
+    {
+        lock (_taskQueueLock)
+            return _taskQueue.Count;
+    }
+
+    private int GetQueuedMediaCount()
+    {
+        lock (_taskQueueLock)
+            return _queuedMediaIds.Count;
+    }
+
+    private IReadOnlyList<MediaPathTask> GetQueuedTasksSnapshot()
+    {
+        lock (_taskQueueLock)
+            return _taskQueue.ToList();
+    }
+
+    private void ReleaseQueuedMediaIdIfFinished(string itemId)
+    {
+        lock (_taskQueueLock)
+        {
+            if (_taskQueue.Any(task => string.Equals(task.ItemId, itemId, StringComparison.OrdinalIgnoreCase)))
+                return;
+            _queuedMediaIds.Remove(itemId);
+        }
+        RaisePropertyChanged(nameof(SelectionSummary));
+    }
+
+    private void ClearPendingTaskQueue()
+    {
+        lock (_taskQueueLock)
+        {
+            _taskQueue.Clear();
+            _queuedMediaIds.Clear();
+        }
+        RaisePropertyChanged(nameof(SelectionSummary));
     }
 
     private async Task RetryFailedTranslationsAsync()
@@ -344,7 +544,7 @@ public sealed class MainViewModel : ObservableObject
                 {
                     try
                     {
-                        await _client.RefreshLibraryAsync(SelectedLibraryId);
+                        await _client!.RefreshLibraryAsync(SelectedLibraryId);
                         AppendLog("Jellyfin library refresh requested after subtitle move.");
                     }
                     catch (Exception ex)
@@ -674,7 +874,7 @@ public sealed class MainViewModel : ObservableObject
                         AppendLog("已成功复制字幕，正在请求 Jellyfin 刷新当前媒体库。");
                         try
                         {
-                            await _client.RefreshLibraryAsync(SelectedLibraryId);
+                            await _client!.RefreshLibraryAsync(SelectedLibraryId);
                             AppendLog("Jellyfin 媒体库刷新请求已提交。");
                         }
                         catch (Exception ex)
