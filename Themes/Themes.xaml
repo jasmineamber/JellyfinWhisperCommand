@@ -1,0 +1,12 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <ResourceDictionary.MergedDictionaries>
+    <ResourceDictionary Source="01-Colors.xaml" />
+    <ResourceDictionary Source="02-Typography.xaml" />
+    <ResourceDictionary Source="03-Dimensions.xaml" />
+    <ResourceDictionary Source="04-Styles-Buttons.xaml" />
+    <ResourceDictionary Source="05-Styles-Inputs.xaml" />
+    <ResourceDictionary Source="06-Styles-Common.xaml" />
+    <ResourceDictionary Source="07-Styles-Filters.xaml" />
+  </ResourceDictionary.MergedDictionaries>
+</ResourceDictionary>

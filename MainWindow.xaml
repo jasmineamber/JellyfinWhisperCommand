@@ -2,169 +2,186 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:nlog="clr-namespace:NLog.WPF;assembly=NLog.WPF"
-        Title="Jellyfin Whisper 命令执行器" Icon="app-icon.ico" Height="820" Width="1200" MinHeight="600" MinWidth="850"
-        Background="#F6F7F9"
-        Closing="Window_Closing">
-  <Grid Margin="24">
-    <TabControl SelectedIndex="{Binding SelectedTabIndex}">
-      <TabItem Header="Jellyfin">
-        <Grid Margin="16">
-          <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="12" />
-            <RowDefinition Height="*" />
-            <RowDefinition Height="Auto" />
-          </Grid.RowDefinitions>
+        xmlns:controls="clr-namespace:JellyfinWhisperCommand.Controls"
+        xmlns:views="clr-namespace:JellyfinWhisperCommand.Views"
+        xmlns:vm="clr-namespace:JellyfinWhisperCommand"
+        Title="Jellyfin Whisper 命令执行器" Icon="app-icon.ico" Height="820" Width="1200" MinHeight="700" MinWidth="1100"
+        Background="{StaticResource Brush.WindowBackground}"
+        FontFamily="{StaticResource Font.App}"
+        UseLayoutRounding="True" SnapsToDevicePixels="True"
+        Closing="Window_Closing"
+        PreviewKeyDown="Window_PreviewKeyDown">
 
-          <Border Padding="16" Background="White" BorderBrush="#D9DDE3" BorderThickness="1" CornerRadius="6">
-            <Grid>
-              <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="2*" />
-                <ColumnDefinition Width="16" />
-                <ColumnDefinition Width="150" />
-                <ColumnDefinition Width="16" />
-                <ColumnDefinition Width="100" />
-                <ColumnDefinition Width="16" />
-                <ColumnDefinition Width="100" />
-              </Grid.ColumnDefinitions>
-              <StackPanel Grid.Column="0">
-                <TextBlock Text="媒体库" Margin="0,0,0,5" />
-                <ComboBox ItemsSource="{Binding Libraries}" DisplayMemberPath="Name" SelectedValuePath="Id"
-                          SelectedValue="{Binding SelectedLibraryId}" MinWidth="200" />
-              </StackPanel>
-              <StackPanel Grid.Column="2">
-                <TextBlock Text="排序方式" Margin="0,0,0,5" />
-                <ComboBox ItemsSource="{Binding SortOptions}" DisplayMemberPath="Name" SelectedValuePath="Value"
-                          SelectedValue="{Binding SelectedSort}" />
-              </StackPanel>
-              <StackPanel Grid.Column="4">
-                <TextBlock Text="字幕" Margin="0,0,0,5" />
-                <ComboBox ItemsSource="{Binding SubtitleOptions}" DisplayMemberPath="Name" SelectedValuePath="Value"
-                          SelectedValue="{Binding HasSubtitles}" />
-              </StackPanel>
-              <Button Grid.Column="6" Content="筛选" VerticalAlignment="Bottom" Height="28" Command="{Binding SearchCommand}" />
-            </Grid>
-          </Border>
+  <Grid>
+    <Grid.RowDefinitions>
+      <RowDefinition Height="{StaticResource Height.TopBar}" />
+      <RowDefinition Height="*" />
+      <RowDefinition Height="{StaticResource Height.StatusBar}" />
+    </Grid.RowDefinitions>
+    <Grid.ColumnDefinitions>
+      <ColumnDefinition Width="{StaticResource Width.NavRail}" />
+      <ColumnDefinition Width="*" />
+    </Grid.ColumnDefinitions>
 
-          <Grid Grid.Row="2">
-            <ScrollViewer VerticalScrollBarVisibility="Auto">
-              <ItemsControl ItemsSource="{Binding MediaItems}">
-                <ItemsControl.ItemsPanel>
-                  <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
-                </ItemsControl.ItemsPanel>
-                <ItemsControl.ItemTemplate>
-                  <DataTemplate>
-                    <ToggleButton IsChecked="{Binding IsSelected, Mode=TwoWay}" Width="160" Height="260" Margin="0,0,16,16"
-                                  Background="White" BorderBrush="#D9DDE3" BorderThickness="1">
-                      <ToggleButton.Template>
-                        <ControlTemplate TargetType="ToggleButton">
-                          <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="5">
-                            <Grid>
-                              <Grid.RowDefinitions><RowDefinition Height="210" /><RowDefinition Height="*" /></Grid.RowDefinitions>
-                              <Image Grid.Row="0" Source="{Binding ImageUrl}" Stretch="UniformToFill" />
-                              <TextBlock Grid.Row="1" Text="{Binding Name}" Margin="9,7" TextWrapping="Wrap" TextTrimming="CharacterEllipsis" />
-                              <Border HorizontalAlignment="Right" VerticalAlignment="Top" Margin="7" Padding="5,2" Background="#1976D2" CornerRadius="3"
-                                      Visibility="{Binding IsSelected, Converter={StaticResource BooleanToVisibilityConverter}}">
-                                <TextBlock Text="已选" Foreground="White" FontSize="12" />
-                              </Border>
-                            </Grid>
-                          </Border>
-                          <ControlTemplate.Triggers>
-                            <Trigger Property="IsChecked" Value="True"><Setter Property="BorderBrush" Value="#1976D2" /><Setter Property="BorderThickness" Value="2" /></Trigger>
-                          </ControlTemplate.Triggers>
-                        </ControlTemplate>
-                      </ToggleButton.Template>
-                    </ToggleButton>
-                  </DataTemplate>
-                </ItemsControl.ItemTemplate>
-              </ItemsControl>
-            </ScrollViewer>
-            <TextBlock Text="{Binding StatusMessage}" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="#58616C" FontSize="15"
-                       Visibility="{Binding IsStatusVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
-          </Grid>
+    <!-- 顶栏 -->
+    <Border Grid.Row="0" Grid.ColumnSpan="2" Background="{StaticResource Brush.TopBarBackground}"
+            BorderBrush="{StaticResource Brush.Border}" BorderThickness="0,0,0,1">
+      <Grid Margin="14,0,12,0">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="12" />
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="8" />
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="8" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
 
-          <Grid Grid.Row="3" Margin="0,12,0,0">
-            <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="*" />
-              <ColumnDefinition Width="Auto" />
-              <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
-            <TextBlock Text="{Binding SelectionSummary}" VerticalAlignment="Center" Foreground="#58616C" />
-            <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center">
-              <Button Content="上一页" Command="{Binding PreviousPageCommand}" IsEnabled="{Binding CanGoPrevious}" Height="28" Padding="8,2" Margin="0,0,8,0" />
-              <TextBlock Text="{Binding PageText}" VerticalAlignment="Center" />
-              <Button Content="下一页" Command="{Binding NextPageCommand}" IsEnabled="{Binding CanGoNext}" Height="28" Padding="8,2" Margin="8,0,0,0" />
-            </StackPanel>
-            <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right">
-              <Button Height="40" Margin="0,0,8,0" VerticalAlignment="Center"
-                      ToolTip="重新执行全部已记录的失败翻译；不会再次转录" Command="{Binding RetryFailedTranslationCommand}"
-                      Background="#B45309" Foreground="White" BorderThickness="0" Padding="12,0"
-                      Content="{Binding RetryFailedTranslationButtonText}" />
-              <Button Width="40" Height="40" VerticalAlignment="Center"
-                      ToolTip="执行所选媒体的 WhisperJav 命令" Command="{Binding GenerateCommand}" Background="#1976D2" Foreground="White"
-                      BorderThickness="0" FontFamily="Segoe MDL2 Assets" FontSize="22" Content="&#xE768;" />
-            </StackPanel>
-          </Grid>
-        </Grid>
-      </TabItem>
+        <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+          <Image Source="app-icon.ico" Width="20" Height="20" Margin="0,0,10,0" />
+          <TextBlock Text="Jellyfin Whisper" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" />
+        </StackPanel>
 
-      <TabItem Header="日志">
-        <Grid Margin="16">
-          <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="12" />
-            <RowDefinition Height="*" />
-          </Grid.RowDefinitions>
-          <StackPanel Orientation="Horizontal">
-            <CheckBox Content="执行完后关机" IsChecked="{Binding ShutdownWhenComplete}" VerticalAlignment="Center" />
-            <Button Content="终止执行" Command="{Binding StopCommand}" Margin="16,0,0,0" Padding="10,3">
-              <Button.Style>
-                <Style TargetType="Button">
-                  <Setter Property="OverridesDefaultStyle" Value="True" />
-                  <Setter Property="Background" Value="#C62828" />
-                  <Setter Property="Foreground" Value="White" />
-                  <Setter Property="BorderBrush" Value="#A61F1F" />
-                  <Setter Property="Opacity" Value="1" />
-                  <Setter Property="Template">
-                    <Setter.Value>
-                      <ControlTemplate TargetType="Button">
-                        <Border x:Name="ButtonBorder"
-                                Padding="{TemplateBinding Padding}"
-                                Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="3">
-                          <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
-                                            VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
-                                            RecognizesAccessKey="True" />
-                        </Border>
-                      </ControlTemplate>
-                    </Setter.Value>
-                  </Setter>
+        <Border Grid.Column="2" CornerRadius="12" Padding="10,3" VerticalAlignment="Center">
+          <Border.Style>
+            <Style TargetType="Border">
+              <Setter Property="Background" Value="{DynamicResource Brush.DangerSubtle}" />
+              <Style.Triggers>
+                <DataTrigger Binding="{Binding IsConnecting}" Value="True">
+                  <Setter Property="Background" Value="{DynamicResource Brush.WarningSubtle}" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding IsConnected}" Value="True">
+                  <Setter Property="Background" Value="{DynamicResource Brush.SuccessSubtle}" />
+                </DataTrigger>
+              </Style.Triggers>
+            </Style>
+          </Border.Style>
+          <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+            <Ellipse Width="8" Height="8" Margin="0,0,7,0" VerticalAlignment="Center">
+              <Ellipse.Style>
+                <Style TargetType="Ellipse">
+                  <Setter Property="Fill" Value="{DynamicResource Brush.Danger}" />
                   <Style.Triggers>
-                    <Trigger Property="IsMouseOver" Value="True">
-                      <Setter Property="Background" Value="#B71C1C" />
-                      <Setter Property="BorderBrush" Value="#8E1616" />
-                    </Trigger>
-                    <Trigger Property="IsPressed" Value="True">
-                      <Setter Property="Background" Value="#8E1616" />
-                      <Setter Property="BorderBrush" Value="#6F1111" />
-                    </Trigger>
-                    <Trigger Property="IsEnabled" Value="False">
-                      <Setter Property="Background" Value="#FCE8E6" />
-                      <Setter Property="Foreground" Value="#8A1C14" />
-                      <Setter Property="BorderBrush" Value="#D8A39D" />
-                    </Trigger>
+                    <DataTrigger Binding="{Binding IsConnecting}" Value="True">
+                      <Setter Property="Fill" Value="{DynamicResource Brush.Warning}" />
+                    </DataTrigger>
+                    <DataTrigger Binding="{Binding IsConnected}" Value="True">
+                      <Setter Property="Fill" Value="{DynamicResource Brush.Success}" />
+                    </DataTrigger>
                   </Style.Triggers>
                 </Style>
-              </Button.Style>
-            </Button>
+              </Ellipse.Style>
+            </Ellipse>
+            <TextBlock Text="{Binding ConnectionText}" FontSize="12" VerticalAlignment="Center" />
           </StackPanel>
-          <Border Grid.Row="2" Background="#171A1F" BorderBrush="#2B313A" BorderThickness="1" CornerRadius="4" Padding="12">
-            <nlog:NlogRichTextBox x:Name="LogTextBox" MaxRowCount="0" />
-          </Border>
+        </Border>
+
+        <Button Grid.Column="4" Style="{StaticResource Button.Ghost}"
+                Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:PageKind.Tasks}">
+          <StackPanel Orientation="Horizontal">
+            <TextBlock Text="任务" />
+            <Border CornerRadius="10" Padding="5,1" Margin="6,0,0,0"
+                    Visibility="{Binding HeaderTaskBadgeVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
+              <Border.Style>
+                <Style TargetType="Border">
+                  <Setter Property="Background" Value="{DynamicResource Brush.AccentSubtle}" />
+                  <Style.Triggers>
+                    <DataTrigger Binding="{Binding HeaderTaskBadgeIsFailure}" Value="True">
+                      <Setter Property="Background" Value="{DynamicResource Brush.DangerSubtle}" />
+                    </DataTrigger>
+                  </Style.Triggers>
+                </Style>
+              </Border.Style>
+              <TextBlock FontSize="10">
+                <TextBlock.Style>
+                  <Style TargetType="TextBlock">
+                    <Setter Property="Foreground" Value="{DynamicResource Brush.Accent}" />
+                    <Style.Triggers>
+                      <DataTrigger Binding="{Binding HeaderTaskBadgeIsFailure}" Value="True">
+                        <Setter Property="Foreground" Value="{DynamicResource Brush.Danger}" />
+                      </DataTrigger>
+                    </Style.Triggers>
+                  </Style>
+                </TextBlock.Style>
+                <TextBlock.Text>
+                  <Binding Path="HeaderTaskBadgeText" />
+                </TextBlock.Text>
+              </TextBlock>
+            </Border>
+          </StackPanel>
+        </Button>
+        <Button Grid.Column="6" Style="{StaticResource Button.Ghost}" ToolTip="执行日志"
+                Command="{Binding ToggleLogDrawerCommand}">
+          <Path Data="M4,3 L16,3 L16,21 L4,21 Z M7,8 L13,8 M7,12 L13,12 M7,16 L11,16"
+                Stroke="{DynamicResource Brush.TextSecondary}" StrokeThickness="1.4" Width="18" Height="18" Stretch="Uniform" />
+        </Button>
+      </Grid>
+    </Border>
+
+    <!-- 左导航 -->
+    <Border Grid.Row="1" Grid.Column="0" Background="{StaticResource Brush.Surface}"
+            BorderBrush="{StaticResource Brush.Border}" BorderThickness="0,0,1,0">
+      <StackPanel Margin="0,10,0,0">
+        <RadioButton Style="{StaticResource Nav.Item}" Content="媒体库" GroupName="MainNav"
+                     IsChecked="{Binding IsMediaPage, Mode=OneWay}"
+                     Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:PageKind.Media}" />
+        <RadioButton Style="{StaticResource Nav.Item}" Content="任务" GroupName="MainNav"
+                     IsChecked="{Binding IsTasksPage, Mode=OneWay}"
+                     Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:PageKind.Tasks}" />
+        <RadioButton Style="{StaticResource Nav.Item}" Content="设置" GroupName="MainNav"
+                     IsChecked="{Binding IsSettingsPage, Mode=OneWay}"
+                     Command="{Binding NavigateCommand}" CommandParameter="{x:Static vm:PageKind.Settings}" />
+      </StackPanel>
+    </Border>
+
+    <!-- 内容宿主 -->
+    <Grid Grid.Row="1" Grid.Column="1" Margin="20">
+      <views:MediaPageView Visibility="{Binding IsMediaPage, Converter={StaticResource BooleanToVisibilityConverter}}" />
+      <views:TasksPageView Visibility="{Binding IsTasksPage, Converter={StaticResource BooleanToVisibilityConverter}}" />
+      <views:SettingsPageView Visibility="{Binding IsSettingsPage, Converter={StaticResource BooleanToVisibilityConverter}}" />
+    </Grid>
+
+    <!-- 状态栏 -->
+    <Border Grid.Row="2" Grid.ColumnSpan="2" Background="{StaticResource Brush.StatusBarBackground}"
+            BorderBrush="{StaticResource Brush.Border}" BorderThickness="0,1,0,0">
+      <Grid Margin="14,0,12,0">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <TextBlock Grid.Column="0" Text="{Binding GlobalTaskStatusText}" FontSize="12"
+                   VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+        <TextBlock Grid.Column="2" Text="{Binding ActiveTaskStatusText}" FontSize="12"
+                   Foreground="{DynamicResource Brush.TextSecondary}" VerticalAlignment="Center"
+                   Visibility="{Binding HasActiveTasks, Converter={StaticResource BooleanToVisibilityConverter}}" />
+      </Grid>
+    </Border>
+
+    <!-- 日志抽屉 -->
+    <Grid Grid.RowSpan="3" Grid.ColumnSpan="2"
+          Visibility="{Binding IsLogDrawerOpen, Converter={StaticResource BooleanToVisibilityConverter}}">
+      <Border Background="#66000000" MouseLeftButtonDown="DrawerScrim_MouseLeftButtonDown" />
+      <Border Width="480" HorizontalAlignment="Right" Background="{DynamicResource Brush.Surface}"
+              BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1,0,0,0">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="44" />
+            <RowDefinition Height="*" />
+          </Grid.RowDefinitions>
+          <Grid Grid.Row="0" Margin="14,0">
+            <TextBlock Text="日志" FontWeight="SemiBold" Foreground="{DynamicResource Brush.TextPrimary}"
+                       VerticalAlignment="Center" />
+            <Button Style="{StaticResource Button.Ghost}" Content="查看日志文件"
+                    HorizontalAlignment="Right" VerticalAlignment="Center"
+                    Click="ViewLogFile_Click" />
+          </Grid>
+          <nlog:NlogRichTextBox Grid.Row="1" x:Name="LogTextBox" Margin="8,0,8,8"
+                                 Background="Transparent" />
         </Grid>
-      </TabItem>
-    </TabControl>
+      </Border>
+    </Grid>
   </Grid>
 </Window>

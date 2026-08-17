@@ -29,7 +29,7 @@ public sealed class JellyfinClient : IDisposable
                       .ToList();
     }
 
-    public async Task<JellyfinItemsResponse> GetItemsAsync(string libraryId, string sortBy, bool hasSubtitles, int startIndex, int limit)
+    public async Task<JellyfinItemsResponse> GetItemsAsync(string libraryId, string sortBy, bool hasSubtitles, string? searchTerm, int startIndex, int limit)
     {
         var query = new Dictionary<string, string>
         {
@@ -43,6 +43,8 @@ public sealed class JellyfinClient : IDisposable
             ["StartIndex"] = startIndex.ToString(),
             ["Limit"] = limit.ToString()
         };
+        if (!string.IsNullOrWhiteSpace(searchTerm))
+            query["SearchTerm"] = searchTerm.Trim();
         var url = $"{_baseUrl}/Items?{string.Join("&", query.Select(x => $"{Uri.EscapeDataString(x.Key)}={Uri.EscapeDataString(x.Value)}"))}";
         using var response = await _http.GetAsync(url);
         await EnsureSuccessAsync(response);

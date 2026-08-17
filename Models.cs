@@ -61,10 +61,34 @@ public sealed record MediaLibrary(string Id, string Name);
 public sealed class MediaItem : ObservableObject
 {
     private bool _isSelected;
+    private TaskPhase? _taskPhase;
     public required string Id { get; init; }
     public required string Name { get; init; }
     public required string ImageUrl { get; init; }
     public bool IsSelected { get => _isSelected; set => SetProperty(ref _isSelected, value); }
+    public TaskPhase? TaskPhase
+    {
+        get => _taskPhase;
+        set
+        {
+            if (!SetProperty(ref _taskPhase, value)) return;
+            RaisePropertyChanged(nameof(HasTaskState));
+            RaisePropertyChanged(nameof(TaskStateText));
+        }
+    }
+
+    public bool HasTaskState => TaskPhase is not null;
+    public string TaskStateText => TaskPhase switch
+    {
+        JellyfinWhisperCommand.TaskPhase.Queued => "已加入任务",
+        JellyfinWhisperCommand.TaskPhase.Transcribing => "转录中",
+        JellyfinWhisperCommand.TaskPhase.Translating => "翻译中",
+        JellyfinWhisperCommand.TaskPhase.PostProcessing => "后处理中",
+        JellyfinWhisperCommand.TaskPhase.Completed => "已完成",
+        JellyfinWhisperCommand.TaskPhase.Failed => "处理失败",
+        JellyfinWhisperCommand.TaskPhase.Stopped => "已停止",
+        _ => "待处理"
+    };
 }
 
 public sealed class JellyfinItemsResponse

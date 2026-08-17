@@ -1,0 +1,52 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <!-- 背景与表面 -->
+  <SolidColorBrush x:Key="Brush.WindowBackground" Color="#F3F4F6" />
+  <SolidColorBrush x:Key="Brush.Surface" Color="#FFFFFF" />
+  <SolidColorBrush x:Key="Brush.Subtle" Color="#F0F2F5" />
+  <SolidColorBrush x:Key="Brush.Hover" Color="#F7F8FA" />
+  <SolidColorBrush x:Key="Brush.TopBarBackground" Color="#FFFFFF" />
+  <SolidColorBrush x:Key="Brush.StatusBarBackground" Color="#FFFFFF" />
+
+  <!-- 边框 -->
+  <SolidColorBrush x:Key="Brush.Border" Color="#E2E5EA" />
+  <SolidColorBrush x:Key="Brush.BorderStrong" Color="#C7CBD3" />
+  <SolidColorBrush x:Key="Brush.BorderInputHover" Color="#A8AEB8" />
+
+  <!-- 文本 -->
+  <SolidColorBrush x:Key="Brush.TextPrimary" Color="#1F2329" />
+  <SolidColorBrush x:Key="Brush.TextSecondary" Color="#5C6370" />
+  <SolidColorBrush x:Key="Brush.TextDisabled" Color="#9AA0A8" />
+  <SolidColorBrush x:Key="Brush.TextOnAccent" Color="#FFFFFF" />
+
+  <!-- 强调色 -->
+  <SolidColorBrush x:Key="Brush.Accent" Color="#2D6CF0" />
+  <SolidColorBrush x:Key="Brush.AccentHover" Color="#1F5ED8" />
+  <SolidColorBrush x:Key="Brush.AccentPressed" Color="#194FA8" />
+  <SolidColorBrush x:Key="Brush.AccentSubtle" Color="#E8EFFD" />
+  <SolidColorBrush x:Key="Brush.AccentDisabled" Color="#9DB8F5" />
+
+  <!-- 状态色 -->
+  <SolidColorBrush x:Key="Brush.Success" Color="#1B873F" />
+  <SolidColorBrush x:Key="Brush.SuccessSubtle" Color="#E4F5EA" />
+  <SolidColorBrush x:Key="Brush.Warning" Color="#B58900" />
+  <SolidColorBrush x:Key="Brush.WarningSubtle" Color="#FAF3E0" />
+  <SolidColorBrush x:Key="Brush.Danger" Color="#D6402F" />
+  <SolidColorBrush x:Key="Brush.DangerHover" Color="#C03A2B" />
+  <SolidColorBrush x:Key="Brush.DangerPressed" Color="#A62F21" />
+  <SolidColorBrush x:Key="Brush.DangerSubtle" Color="#FBE9E7" />
+
+  <!-- 日志终端 -->
+  <SolidColorBrush x:Key="Brush.LogBackground" Color="#171A1F" />
+  <SolidColorBrush x:Key="Brush.LogBorder" Color="#2B313A" />
+  <SolidColorBrush x:Key="Brush.LogText" Color="#D4D8DE" />
+  <SolidColorBrush x:Key="Brush.LogInfo" Color="#9AA4B0" />
+  <SolidColorBrush x:Key="Brush.LogWarn" Color="#E0B54E" />
+  <SolidColorBrush x:Key="Brush.LogError" Color="#F28B82" />
+
+  <!-- 海报占位 -->
+  <SolidColorBrush x:Key="Brush.PosterPlaceholder" Color="#E4E7EC" />
+  <SolidColorBrush x:Key="Brush.PosterPlaceholderGlyph" Color="#9AA0A8" />
+
+</ResourceDictionary>

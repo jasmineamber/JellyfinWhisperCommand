@@ -1,0 +1,242 @@
+<UserControl x:Class="JellyfinWhisperCommand.Views.MediaPageView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:JellyfinWhisperCommand.Controls">
+  <Grid>
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="*" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+
+    <!-- 筛选工具栏：固定操作区，避免正常窗口尺寸下筛选按钮被挤出可视区域 -->
+    <Border Background="{DynamicResource Brush.Surface}"
+            BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
+            CornerRadius="{DynamicResource Radius.Medium}" Padding="14,12">
+      <Grid>
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="180" />
+          <ColumnDefinition Width="16" />
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="16" />
+          <ColumnDefinition Width="120" />
+          <ColumnDefinition Width="16" />
+          <ColumnDefinition Width="120" />
+          <ColumnDefinition Width="16" />
+          <ColumnDefinition Width="72" />
+        </Grid.ColumnDefinitions>
+
+        <TextBlock Grid.Row="0" Grid.Column="0" Text="媒体库" Style="{DynamicResource Text.SectionTitle}" />
+        <TextBlock Grid.Row="0" Grid.Column="8" Text="{Binding MediaCountText}" HorizontalAlignment="Right"
+                   Style="{DynamicResource Text.Label}" />
+
+        <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,10,0,0">
+          <TextBlock Text="媒体库" Style="{DynamicResource Text.Label}" Margin="0,0,0,5" />
+          <ComboBox ItemsSource="{Binding Libraries}" DisplayMemberPath="Name" SelectedValuePath="Id"
+                    SelectedValue="{Binding SelectedLibraryId}" Width="180" />
+        </StackPanel>
+
+        <StackPanel Grid.Row="1" Grid.Column="2" Margin="0,10,0,0">
+          <TextBlock Text="搜索" Style="{DynamicResource Text.Label}" Margin="0,0,0,5" />
+          <TextBox x:Name="SearchTextBox" Text="{Binding SearchTerm, UpdateSourceTrigger=PropertyChanged}"
+                   ToolTip="按名称搜索媒体，回车触发筛选">
+            <TextBox.InputBindings>
+              <KeyBinding Key="Return" Command="{Binding SearchCommand}" />
+            </TextBox.InputBindings>
+          </TextBox>
+        </StackPanel>
+
+        <StackPanel Grid.Row="1" Grid.Column="4" Margin="0,10,0,0">
+          <TextBlock Text="排序方式" Style="{DynamicResource Text.Label}" Margin="0,0,0,5" />
+          <ComboBox ItemsSource="{Binding SortOptions}" DisplayMemberPath="Name" SelectedValuePath="Value"
+                    SelectedValue="{Binding SelectedSort}" Width="120" />
+        </StackPanel>
+
+        <StackPanel Grid.Row="1" Grid.Column="6" Margin="0,10,0,0">
+          <TextBlock Text="是否有字幕" Style="{DynamicResource Text.Label}" Margin="0,0,0,5" />
+          <ComboBox ItemsSource="{Binding SubtitleOptions}" DisplayMemberPath="Name" SelectedValuePath="Value"
+                    SelectedValue="{Binding HasSubtitles}" Width="120" />
+        </StackPanel>
+
+        <Button Grid.Row="1" Grid.Column="8" Content="筛选" Width="72" VerticalAlignment="Bottom"
+                Style="{DynamicResource Button.Primary}" Command="{Binding SearchCommand}" />
+      </Grid>
+    </Border>
+
+    <!-- 媒体状态筛选 -->
+    <ListBox Grid.Row="1" Margin="0,12,0,0"
+             Style="{DynamicResource SegmentedListBox}"
+             ItemsSource="{Binding MediaStatusFilterOptions}"
+             DisplayMemberPath="Name"
+             SelectedValuePath="Value"
+             SelectedValue="{Binding SelectedMediaStatusFilter}" />
+
+    <!-- 媒体网格 -->
+    <Grid Grid.Row="2" Margin="0,12,0,0">
+      <ScrollViewer VerticalScrollBarVisibility="Auto">
+         <ItemsControl ItemsSource="{Binding FilteredMediaItems}">
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate>
+              <WrapPanel />
+            </ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
+          <ItemsControl.ItemTemplate>
+            <DataTemplate>
+              <ToggleButton IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                            Width="{DynamicResource Size.PosterCardWidth}" Height="288" Margin="0,0,12,12"
+                            Background="{DynamicResource Brush.Surface}"
+                            BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
+                <ToggleButton.Template>
+                  <ControlTemplate TargetType="ToggleButton">
+                    <Border x:Name="CardBorder"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="{DynamicResource Radius.Medium}"
+                            Cursor="Hand">
+                      <Grid>
+                        <Grid.RowDefinitions>
+                          <RowDefinition Height="{DynamicResource Size.PosterCardImageHeight}" />
+                          <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+
+                        <Border Grid.Row="0" Margin="1,1,1,0"
+                                Background="{DynamicResource Brush.PosterPlaceholder}"
+                                controls:RoundedClipper.CornerRadius="5,5,0,0">
+                          <Image Source="{Binding ImageUrl}" Stretch="UniformToFill" />
+                        </Border>
+
+                        <Border Grid.Row="0" HorizontalAlignment="Right" VerticalAlignment="Top"
+                                Margin="7" Padding="5,2"
+                                Background="{DynamicResource Brush.Accent}"
+                                CornerRadius="{DynamicResource Radius.Small}"
+                                Visibility="{Binding IsSelected, Converter={StaticResource BooleanToVisibilityConverter}}">
+                          <StackPanel Orientation="Horizontal">
+                            <Path Data="M0,4 L3,7 L8,0" Stroke="White" StrokeThickness="1.6" />
+                            <TextBlock Text="已选择" Foreground="White" FontSize="11" Margin="4,0,0,0" VerticalAlignment="Center" />
+                          </StackPanel>
+                        </Border>
+
+                        <StackPanel Grid.Row="1" Margin="9,7,9,0">
+                        <TextBlock Text="{Binding Name}"
+                                   FontSize="{DynamicResource FontSize.CardTitle}" FontWeight="SemiBold"
+                                   TextWrapping="Wrap" TextTrimming="CharacterEllipsis" MaxHeight="32"
+                                   ToolTip="{Binding Name}" />
+                        <TextBlock Text="{Binding TaskStateText}" FontSize="11" Margin="0,4,0,0"
+                                   Visibility="{Binding HasTaskState, Converter={StaticResource BooleanToVisibilityConverter}}">
+                          <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                              <Setter Property="Foreground" Value="{DynamicResource Brush.TextSecondary}" />
+                              <Style.Triggers>
+                                <DataTrigger Binding="{Binding TaskPhase}" Value="Completed"><Setter Property="Foreground" Value="{DynamicResource Brush.Success}" /></DataTrigger>
+                                <DataTrigger Binding="{Binding TaskPhase}" Value="Failed"><Setter Property="Foreground" Value="{DynamicResource Brush.Danger}" /></DataTrigger>
+                                <DataTrigger Binding="{Binding TaskPhase}" Value="Translating"><Setter Property="Foreground" Value="{DynamicResource Brush.Warning}" /></DataTrigger>
+                                <DataTrigger Binding="{Binding TaskPhase}" Value="Transcribing"><Setter Property="Foreground" Value="{DynamicResource Brush.Accent}" /></DataTrigger>
+                              </Style.Triggers>
+                            </Style>
+                          </TextBlock.Style>
+                        </TextBlock>
+                        </StackPanel>
+                      </Grid>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                      <Trigger Property="IsMouseOver" Value="True">
+                        <Setter TargetName="CardBorder" Property="BorderBrush" Value="{DynamicResource Brush.BorderStrong}" />
+                      </Trigger>
+                      <Trigger Property="IsPressed" Value="True">
+                        <Setter TargetName="CardBorder" Property="BorderBrush" Value="{DynamicResource Brush.Accent}" />
+                      </Trigger>
+                      <Trigger Property="IsChecked" Value="True">
+                        <Setter TargetName="CardBorder" Property="BorderBrush" Value="{DynamicResource Brush.Accent}" />
+                        <Setter TargetName="CardBorder" Property="BorderThickness" Value="2" />
+                      </Trigger>
+                    </ControlTemplate.Triggers>
+                  </ControlTemplate>
+                </ToggleButton.Template>
+              </ToggleButton>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </ScrollViewer>
+
+      <!-- 加载中：网格为空且正在连接/查询 -->
+      <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False"
+                  Visibility="{Binding IsMediaLoading, Converter={StaticResource BooleanToVisibilityConverter}}">
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+          <controls:ProgressRing Width="18" Height="18" StrokeThickness="2"
+                                 Foreground="{DynamicResource Brush.Accent}"
+                                 IsActive="True" />
+          <TextBlock Text="{Binding StatusMessage}" FontSize="14"
+                     Foreground="{DynamicResource Brush.TextSecondary}" Margin="10,0,0,0" VerticalAlignment="Center" />
+        </StackPanel>
+      </StackPanel>
+
+      <!-- 提示（未选库等） -->
+      <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False"
+                  Visibility="{Binding ShowMediaPrompt, Converter={StaticResource BooleanToVisibilityConverter}}">
+        <TextBlock Text="{Binding StatusMessage}" FontSize="14"
+                   Foreground="{DynamicResource Brush.TextSecondary}" HorizontalAlignment="Center" />
+      </StackPanel>
+
+      <!-- 错误 -->
+      <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False"
+                  Visibility="{Binding ShowMediaError, Converter={StaticResource BooleanToVisibilityConverter}}">
+        <TextBlock Text="{Binding StatusMessage}" FontSize="14"
+                   Foreground="{DynamicResource Brush.Danger}" HorizontalAlignment="Center" />
+      </StackPanel>
+
+      <!-- 空状态（筛选无结果） -->
+      <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                  Visibility="{Binding ShowMediaEmptyState, Converter={StaticResource BooleanToVisibilityConverter}}">
+        <TextBlock Text="没有找到媒体" FontSize="15" FontWeight="SemiBold" HorizontalAlignment="Center" />
+        <TextBlock Text="尝试调整筛选条件或清空搜索关键字。" FontSize="12"
+                   Foreground="{DynamicResource Brush.TextSecondary}" HorizontalAlignment="Center"
+                   Margin="0,8,0,0" />
+      </StackPanel>
+     </Grid>
+
+    <!-- 页脚 -->
+    <Border Grid.Row="3" Background="{DynamicResource Brush.Surface}"
+            BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
+            CornerRadius="{DynamicResource Radius.Medium}" Padding="14,10" Margin="0,14,0,0">
+      <Grid>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+        <TextBlock Text="{Binding SelectionSummary}" VerticalAlignment="Center"
+                   Foreground="{DynamicResource Brush.TextSecondary}" FontSize="12" />
+
+        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+          <Button Content="全选本页" Style="{DynamicResource Button.Secondary}" Height="28" Padding="10,0"
+                  Margin="0,0,8,0" Command="{Binding SelectAllCommand}" />
+          <Button Content="清除选择" Style="{DynamicResource Button.Secondary}" Height="28" Padding="10,0"
+                  Margin="0,0,8,0" Command="{Binding ClearSelectionCommand}" />
+          <Button Content="上一页" Style="{DynamicResource Button.Secondary}" Height="28" Padding="10,0"
+                  Margin="0,0,8,0" Command="{Binding PreviousPageCommand}" IsEnabled="{Binding CanGoPrevious}" />
+          <TextBlock Text="{Binding PageText}" VerticalAlignment="Center"
+                     Foreground="{DynamicResource Brush.TextSecondary}" FontSize="12" />
+          <Button Content="下一页" Style="{DynamicResource Button.Secondary}" Height="28" Padding="10,0"
+                  Margin="8,0,0,0" Command="{Binding NextPageCommand}" IsEnabled="{Binding CanGoNext}" />
+        </StackPanel>
+
+        <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right">
+          <Button Content="{Binding RetryFailedTranslationButtonText}" Style="{DynamicResource Button.Warning}"
+                  Height="36" Margin="0,0,10,0"
+                  ToolTip="重新执行全部已记录的失败翻译；不会再次转录"
+                  Command="{Binding RetryFailedTranslationCommand}" />
+          <Button Content="{Binding ExecuteButtonText}" Style="{DynamicResource Button.Primary}"
+                  Height="36" MinWidth="128"
+                  ToolTip="将所选媒体加入队列并开始处理（转录、翻译、后处理）"
+                  Command="{Binding GenerateCommand}" />
+        </StackPanel>
+      </Grid>
+    </Border>
+  </Grid>
+</UserControl>

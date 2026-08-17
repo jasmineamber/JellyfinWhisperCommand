@@ -12,7 +12,6 @@
   </ItemGroup>
   <ItemGroup>
     <Resource Include="app-icon.ico" />
-    <None Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
     <None Update="nlog.config" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

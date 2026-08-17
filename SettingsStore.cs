@@ -13,6 +13,9 @@ public static class SettingsStore
                ?? throw new InvalidOperationException("appsettings.json 格式不正确。");
     }
 
+    public static void SaveAppSettings(AppSettings settings) =>
+        File.WriteAllText(Path.Combine(AppDirectory, "appsettings.json"), JsonSerializer.Serialize(settings, JsonOptions));
+
     public static UserSettings LoadUserSettings()
     {
         var path = Path.Combine(AppDirectory, "user-settings.json");
