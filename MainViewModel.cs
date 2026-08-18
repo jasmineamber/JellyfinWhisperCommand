@@ -61,7 +61,7 @@ public sealed class MainViewModel : ObservableObject
     private readonly Dictionary<string, TaskEntryViewModel> _taskEntryByPath = new(StringComparer.OrdinalIgnoreCase);
     public IReadOnlyList<Option<string>> SortOptions { get; } =
     [new("加入日期", "DateCreated"), new("发行日期", "PremiereDate")];
-    public IReadOnlyList<Option<bool>> SubtitleOptions { get; } = [new("否", false), new("是", true)];
+    public IReadOnlyList<Option<bool>> SubtitleOptions { get; } = [new("无字幕", false), new("有字幕", true)];
     public IReadOnlyList<Option<MediaStatusFilter>> MediaStatusFilterOptions { get; } =
     [
         new("全部", MediaStatusFilter.All),
@@ -381,7 +381,12 @@ public sealed class MainViewModel : ObservableObject
             var response = await _client!.GetItemsAsync(SelectedLibraryId, SelectedSort, HasSubtitles, SearchTerm, _pageIndex * PageSize, PageSize);
             foreach (var oldItem in MediaItems) oldItem.PropertyChanged -= OnMediaItemPropertyChanged;
             MediaItems.Clear();
-            foreach (var item in response.Items)
+            var matchedItems = response.Items;
+            if (!string.IsNullOrWhiteSpace(SearchTerm))
+                matchedItems = matchedItems
+                    .Where(i => i.Name.Contains(SearchTerm, StringComparison.CurrentCultureIgnoreCase))
+                    .ToList();
+            foreach (var item in matchedItems)
             {
                 _mediaNameById[item.Id] = string.IsNullOrWhiteSpace(item.Name) ? item.Id : item.Name;
                 var phase = CurrentBatch.Tasks

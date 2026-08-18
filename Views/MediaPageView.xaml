@@ -42,7 +42,7 @@
         </StackPanel>
 
         <StackPanel Grid.Row="1" Grid.Column="2" Margin="0,10,0,0">
-          <TextBlock Text="搜索" Style="{DynamicResource Text.Label}" Margin="0,0,0,5" />
+          <TextBlock Text="名称" Style="{DynamicResource Text.Label}" Margin="0,0,0,5" />
           <TextBox x:Name="SearchTextBox" Text="{Binding SearchTerm, UpdateSourceTrigger=PropertyChanged}"
                    ToolTip="按名称搜索媒体，回车触发筛选">
             <TextBox.InputBindings>

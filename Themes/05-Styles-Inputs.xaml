@@ -6,7 +6,7 @@
     <Setter Property="FontFamily" Value="{DynamicResource Font.App}" />
     <Setter Property="FontSize" Value="{DynamicResource FontSize.Body}" />
     <Setter Property="Height" Value="{DynamicResource Height.Control}" />
-    <Setter Property="Padding" Value="10,0" />
+    <Setter Property="Padding" Value="2,0" />
     <Setter Property="VerticalContentAlignment" Value="Center" />
     <Setter Property="Background" Value="{DynamicResource Brush.Surface}" />
     <Setter Property="Foreground" Value="{DynamicResource Brush.TextPrimary}" />
@@ -46,7 +46,7 @@
     <Setter Property="FontFamily" Value="{DynamicResource Font.App}" />
     <Setter Property="FontSize" Value="{DynamicResource FontSize.Body}" />
     <Setter Property="Height" Value="{DynamicResource Height.Control}" />
-    <Setter Property="Padding" Value="10,0" />
+    <Setter Property="Padding" Value="3,0" />
     <Setter Property="VerticalContentAlignment" Value="Center" />
     <Setter Property="Background" Value="{DynamicResource Brush.Surface}" />
     <Setter Property="Foreground" Value="{DynamicResource Brush.TextPrimary}" />
@@ -88,6 +88,13 @@
     <Setter Property="Height" Value="{DynamicResource Height.Control}" />
     <Setter Property="Foreground" Value="{DynamicResource Brush.TextPrimary}" />
     <Setter Property="ScrollViewer.CanContentScroll" Value="True" />
+    <Setter Property="ItemTemplate">
+      <Setter.Value>
+        <DataTemplate>
+          <TextBlock Text="{Binding Name}" VerticalAlignment="Center" />
+        </DataTemplate>
+      </Setter.Value>
+    </Setter>
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="ComboBox">
@@ -98,28 +105,29 @@
                           IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
                           Background="{DynamicResource Brush.Surface}"
                           BorderBrush="{DynamicResource Brush.BorderStrong}"
-                          BorderThickness="1"
-                          Padding="10,0"
-                          HorizontalAlignment="Stretch"
-                          VerticalAlignment="Stretch">
-              <ToggleButton.Template>
-                <ControlTemplate TargetType="ToggleButton">
-                  <Border x:Name="Root"
-                          Background="{TemplateBinding Background}"
-                          BorderBrush="{TemplateBinding BorderBrush}"
-                          BorderThickness="{TemplateBinding BorderThickness}"
-                          CornerRadius="{DynamicResource Radius.Medium}"
-                          Padding="{TemplateBinding Padding}">
-                    <Grid>
-                      <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                      </Grid.ColumnDefinitions>
-                      <ContentPresenter Grid.Column="0" HorizontalAlignment="Left" VerticalAlignment="Center"
-                                        Content="{Binding SelectionBoxItem, RelativeSource={RelativeSource AncestorType=ComboBox}}"
-                                        ContentTemplate="{Binding SelectionBoxItemTemplate, RelativeSource={RelativeSource AncestorType=ComboBox}}" />
+                           BorderThickness="1"
+                           Padding="0"
+                           HorizontalAlignment="Stretch"
+                           VerticalAlignment="Stretch">
+               <ToggleButton.Template>
+                 <ControlTemplate TargetType="ToggleButton">
+                   <Border x:Name="Root"
+                           Background="{TemplateBinding Background}"
+                           BorderBrush="{TemplateBinding BorderBrush}"
+                           BorderThickness="{TemplateBinding BorderThickness}"
+                           CornerRadius="{DynamicResource Radius.Medium}"
+                           Padding="5,0">
+                     <Grid>
+                       <Grid.ColumnDefinitions>
+                         <ColumnDefinition Width="*" />
+                         <ColumnDefinition Width="Auto" />
+                       </Grid.ColumnDefinitions>
+                       <ContentPresenter Grid.Column="0" HorizontalAlignment="Left" VerticalAlignment="Center"
+                                         Margin="0"
+                                         Content="{Binding SelectionBoxItem, RelativeSource={RelativeSource AncestorType=ComboBox}}"
+                                         ContentTemplate="{Binding SelectionBoxItemTemplate, RelativeSource={RelativeSource AncestorType=ComboBox}}" />
                       <Path Grid.Column="1" Data="M0,0 L5,5 L10,0" Stroke="{DynamicResource Brush.TextSecondary}" StrokeThickness="1.5"
-                            HorizontalAlignment="Center" VerticalAlignment="Center" Margin="6,0,0,0" />
+                            HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,0,4,0" />
                     </Grid>
                   </Border>
                   <ControlTemplate.Triggers>
@@ -153,14 +161,14 @@
     <Setter Property="ItemContainerStyle">
       <Setter.Value>
         <Style TargetType="ComboBoxItem">
-          <Setter Property="Padding" Value="10,7" />
+          <Setter Property="Padding" Value="4,7" />
           <Setter Property="Foreground" Value="{DynamicResource Brush.TextPrimary}" />
           <Setter Property="Template">
             <Setter.Value>
               <ControlTemplate TargetType="ComboBoxItem">
                 <Border x:Name="Root" Background="Transparent" Padding="{TemplateBinding Padding}"
-                        CornerRadius="{DynamicResource Radius.Small}" Margin="4,1">
-                  <ContentPresenter  />
+                        CornerRadius="{DynamicResource Radius.Small}" Margin="0,1">
+                  <ContentPresenter HorizontalAlignment="Left" VerticalAlignment="Center" />
                 </Border>
                 <ControlTemplate.Triggers>
                   <Trigger Property="IsHighlighted" Value="True">
