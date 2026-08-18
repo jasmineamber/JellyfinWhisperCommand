@@ -42,6 +42,9 @@ public sealed class MainViewModel : ObservableObject
     private bool _isExecuting;
     private bool _isStopping;
     private bool _shutdownWhenComplete;
+    private bool _shutdownCancelledForCurrentBatch;
+    private bool _currentBatchSupportsAutomaticShutdown = true;
+    private string _shutdownRequestFailure = "";
     private bool _isConnected;
     private bool _isConnecting;
     private bool _isSearching;
@@ -140,7 +143,16 @@ public sealed class MainViewModel : ObservableObject
     }
     public bool IsExecuting { get => _isExecuting; private set => SetProperty(ref _isExecuting, value); }
     public bool IsStopping { get => _isStopping; private set => SetProperty(ref _isStopping, value); }
-    public bool ShutdownWhenComplete { get => _shutdownWhenComplete; set => SetProperty(ref _shutdownWhenComplete, value); }
+    public bool ShutdownWhenComplete
+    {
+        get => _shutdownWhenComplete;
+        set
+        {
+            if (!SetProperty(ref _shutdownWhenComplete, value)) return;
+            RaisePropertyChanged(nameof(ShowShutdownWhenCompleteStatus));
+            RaisePropertyChanged(nameof(BatchStateDetailText));
+        }
+    }
     public PageKind CurrentPage
     {
         get => _currentPage;
@@ -498,14 +510,22 @@ public sealed class MainViewModel : ObservableObject
     };
     public string BatchStateDetailText => BatchState switch
     {
+        BatchState.Completed when ShowShutdownWhenCompleteStatus && !string.IsNullOrWhiteSpace(_shutdownRequestFailure)
+            => $"自动关机请求失败：{_shutdownRequestFailure}",
+        BatchState.Completed when ShowShutdownWhenCompleteStatus => "所有任务已结束，正在请求自动关机",
         BatchState.Completed => $"{CompletedTaskCount} 个任务已成功处理",
+        BatchState.Failed when ShowShutdownWhenCompleteStatus && !string.IsNullOrWhiteSpace(_shutdownRequestFailure)
+            => $"{FailedTaskCount} 个任务处理失败 · 自动关机请求失败：{_shutdownRequestFailure}",
         BatchState.Failed => $"{FailedTaskCount} 个任务处理失败",
+        BatchState.Stopped when ShowShutdownWhenCompleteStatus && _shutdownCancelledForCurrentBatch => "任务已停止，本次不会自动关机",
         BatchState.Stopped => $"{StoppedTaskCount} 个任务已停止",
         BatchState.Partial => $"已完成 {CompletedTaskCount} · 失败 {FailedTaskCount}"
-                              + (StoppedTaskCount > 0 ? $" · 已停止 {StoppedTaskCount}" : ""),
+                              + (StoppedTaskCount > 0 ? $" · 已停止 {StoppedTaskCount}" : "")
+                              + (ShowShutdownWhenCompleteStatus && _shutdownCancelledForCurrentBatch ? " · 本次不会自动关机" : ""),
         _ => ""
     };
     public bool HasBatchCompletion => IsBatchSettled;
+    public bool ShowShutdownWhenCompleteStatus => ShutdownWhenComplete && _currentBatchSupportsAutomaticShutdown;
 
     private TaskEntryViewModel AddTaskEntry(string itemId, string mediaName, string filePath)
     {
@@ -637,6 +657,10 @@ public sealed class MainViewModel : ObservableObject
         }
         entry.ResetForRetry();
         entry.Phase = TaskPhase.Queued;
+        _shutdownCancelledForCurrentBatch = false;
+        _currentBatchSupportsAutomaticShutdown = true;
+        ClearShutdownRequestFailure();
+        RaisePropertyChanged(nameof(ShowShutdownWhenCompleteStatus));
         _taskEntryByPath[entry.FilePath] = entry;
         RefreshQueuePositions();
         RefreshTaskSummary();
@@ -688,6 +712,10 @@ public sealed class MainViewModel : ObservableObject
         if (selectedIds.Count == 0) return;
 
         var queuedCount = 0;
+        _shutdownCancelledForCurrentBatch = false;
+        _currentBatchSupportsAutomaticShutdown = true;
+        ClearShutdownRequestFailure();
+        RaisePropertyChanged(nameof(ShowShutdownWhenCompleteStatus));
         AppendLog($"Adding {selectedIds.Count} selected media item(s) to the task queue.");
 
         foreach (var itemId in selectedIds)
@@ -943,12 +971,7 @@ public sealed class MainViewModel : ObservableObject
 
                 AppendLog(allSucceeded ? "All queued path tasks completed." : "Queued path tasks completed with failures.");
                 if (ShutdownWhenComplete)
-                {
-                    AppendLog("System shutdown requested after task queue completion.");
-                    var shutdownStartInfo = new ProcessStartInfo("shutdown.exe", "/s /t 0") { UseShellExecute = false, CreateNoWindow = true };
-                    AppendLog($"Command: {CommandBuilder.FormatCommand(shutdownStartInfo)}");
-                    Process.Start(shutdownStartInfo);
-                }
+                    await RequestSystemShutdownAsync();
             }
         }
         catch (Exception ex)
@@ -1051,6 +1074,12 @@ public sealed class MainViewModel : ObservableObject
                 .ToList();
         }
         if (tasks.Count == 0) return;
+
+        _shutdownCancelledForCurrentBatch = false;
+        _currentBatchSupportsAutomaticShutdown = false;
+        ClearShutdownRequestFailure();
+        RaisePropertyChanged(nameof(ShowShutdownWhenCompleteStatus));
+        RaisePropertyChanged(nameof(BatchStateDetailText));
 
         foreach (var task in tasks)
         {
@@ -1573,6 +1602,7 @@ public sealed class MainViewModel : ObservableObject
 
         if (!IsExecuting || IsStopping) return;
         IsStopping = true;
+        _shutdownCancelledForCurrentBatch = true;
         StopCommand.RaiseCanExecuteChanged();
 
         if (process is null)
@@ -1607,6 +1637,7 @@ public sealed class MainViewModel : ObservableObject
         catch (Exception ex)
         {
             IsStopping = false;
+            _shutdownCancelledForCurrentBatch = false;
             StopCommand.RaiseCanExecuteChanged();
             AppendLog($"[错误] 无法终止任务：{ex.Message}", NLog.LogLevel.Error);
         }
@@ -1631,6 +1662,76 @@ public sealed class MainViewModel : ObservableObject
         if (!taskKill.Start()) throw new InvalidOperationException("Unable to start taskkill.");
         await taskKill.WaitForExitAsync();
         if (taskKill.ExitCode != 0) throw new InvalidOperationException($"taskkill 退出码: {taskKill.ExitCode}。");
+    }
+
+    private async Task RequestSystemShutdownAsync()
+    {
+        var shutdownPath = Path.Combine(Environment.SystemDirectory, "shutdown.exe");
+        if (!File.Exists(shutdownPath))
+        {
+            SetShutdownRequestFailure($"未找到 {shutdownPath}。");
+            return;
+        }
+
+        var consoleEncoding = Encoding.GetEncoding(CultureInfo.CurrentCulture.TextInfo.OEMCodePage);
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = shutdownPath,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardOutputEncoding = consoleEncoding,
+            StandardErrorEncoding = consoleEncoding
+        };
+        startInfo.ArgumentList.Add("/s");
+        startInfo.ArgumentList.Add("/f");
+        startInfo.ArgumentList.Add("/t");
+        startInfo.ArgumentList.Add("0");
+
+        AppendLog("System shutdown requested after task queue completion.");
+        AppendLog($"Command: {CommandBuilder.FormatCommand(startInfo)}");
+        try
+        {
+            using var process = Process.Start(startInfo)
+                ?? throw new InvalidOperationException("无法启动 shutdown.exe。");
+            var standardOutputTask = process.StandardOutput.ReadToEndAsync();
+            var standardErrorTask = process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+            var standardOutput = await standardOutputTask;
+            var standardError = await standardErrorTask;
+
+            if (process.ExitCode == 0)
+            {
+                AppendLog("System shutdown command completed successfully.");
+                return;
+            }
+
+            var detail = string.Join(" ", new[] { standardError, standardOutput }
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Select(value => value.Trim()));
+            SetShutdownRequestFailure(detail.Length > 0
+                ? $"shutdown.exe 退出码 {process.ExitCode}：{detail}"
+                : $"shutdown.exe 退出码：{process.ExitCode}。");
+        }
+        catch (Exception ex)
+        {
+            SetShutdownRequestFailure(ex.Message);
+        }
+    }
+
+    private void ClearShutdownRequestFailure()
+    {
+        if (string.IsNullOrEmpty(_shutdownRequestFailure)) return;
+        _shutdownRequestFailure = "";
+        RaisePropertyChanged(nameof(BatchStateDetailText));
+    }
+
+    private void SetShutdownRequestFailure(string message)
+    {
+        _shutdownRequestFailure = message;
+        RaisePropertyChanged(nameof(BatchStateDetailText));
+        AppendLog($"[ERROR] System shutdown request failed: {message}", NLog.LogLevel.Error);
     }
 
     private void AppendLog(string message, NLog.LogLevel? level = null)

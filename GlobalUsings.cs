@@ -2,6 +2,7 @@ global using System.Collections.ObjectModel;
 global using System.Collections.Specialized;
 global using System.ComponentModel;
 global using System.Diagnostics;
+global using System.Globalization;
 global using System.IO;
 global using System.Net.Http;
 global using System.Net.Http.Json;
