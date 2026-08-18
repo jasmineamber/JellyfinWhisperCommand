@@ -292,7 +292,7 @@ public sealed class MainViewModel : ObservableObject
         NavigateCommand = new RelayCommand<PageKind>(page => CurrentPage = page);
         ToggleLogDrawerCommand = new RelayCommand(() => IsLogDrawerOpen = !IsLogDrawerOpen);
         SelectTaskFilterCommand = new RelayCommand<TaskFilter>(filter => SelectedTaskFilter = filter);
-        RetryTaskCommand = new AsyncRelayCommand<TaskEntryViewModel>(RetryTaskAsync, entry => entry?.CanRetry == true && !IsExecuting);
+        RetryTaskCommand = new AsyncRelayCommand<TaskEntryViewModel>(RetryTaskAsync, entry => entry?.CanRetry == true);
         ViewTaskLogCommand = new RelayCommand<TaskEntryViewModel>(_ => IsLogDrawerOpen = true);
         CancelTaskCommand = new RelayCommand<TaskEntryViewModel>(CancelTask, entry => entry?.CanCancel == true);
         _ = LoadLibrariesAsync();
@@ -678,25 +678,53 @@ public sealed class MainViewModel : ObservableObject
 
     private async Task RetryTaskAsync(TaskEntryViewModel? entry)
     {
-        if (entry is null || !entry.CanRetry || IsExecuting) return;
+        if (entry is null || !entry.CanRetry) return;
+
+        bool enqueue;
         lock (_taskQueueLock)
         {
-            if (!_queuedMediaIds.Add(entry.ItemId)) return;
-            _taskQueue.Enqueue(new MediaPathTask(entry.ItemId, entry.MediaName, entry.FilePath));
+            enqueue = !_taskQueue.Any(t => string.Equals(t.Path, entry.FilePath, StringComparison.OrdinalIgnoreCase));
+            if (enqueue)
+            {
+                _queuedMediaIds.Add(entry.ItemId);
+                _taskQueue.Enqueue(new MediaPathTask(entry.ItemId, entry.MediaName, entry.FilePath));
+            }
         }
+        if (!enqueue) return;
+
         entry.ResetForRetry();
         entry.Phase = TaskPhase.Queued;
+
         _shutdownCancelledForCurrentBatch = false;
         _currentBatchSupportsAutomaticShutdown = true;
         ClearShutdownRequestFailure();
         RaisePropertyChanged(nameof(ShowShutdownWhenCompleteStatus));
+
         _taskEntryByPath[entry.FilePath] = entry;
+
         RefreshQueuePositions();
         RefreshTaskSummary();
         CurrentPage = PageKind.Tasks;
-        IsExecuting = true;
-        IsStopping = false;
-        _ = ProcessTaskQueueAsync();
+
+        bool startWorker;
+        lock (_executionLock)
+        {
+            // A retry cancels an in-progress stop: resume processing instead of discarding.
+            IsStopping = false;
+            startWorker = !IsExecuting;
+            if (startWorker) IsExecuting = true;
+        }
+
+        if (startWorker)
+        {
+            AppendLog($"[QUEUE] Starting queue worker for retry. Pending path tasks: {GetQueueTaskCount()}.");
+            _ = ProcessTaskQueueAsync();
+        }
+        else
+        {
+            AppendLog($"[QUEUE] Retry task added while queue worker is active. Pending path tasks: {GetQueueTaskCount()}.");
+        }
+
         await Task.CompletedTask;
     }
 
@@ -811,11 +839,12 @@ public sealed class MainViewModel : ObservableObject
         bool startWorker;
         lock (_executionLock)
         {
+            // Adding work also cancels an in-progress stop so newly enqueued tasks are not orphaned.
+            IsStopping = false;
             startWorker = !IsExecuting;
             if (startWorker)
             {
                 IsExecuting = true;
-                IsStopping = false;
             }
         }
 
@@ -981,10 +1010,7 @@ public sealed class MainViewModel : ObservableObject
 
             if (IsStopping)
             {
-                var pendingPathCount = GetQueueTaskCount();
-                var pendingMediaCount = GetQueuedMediaCount();
-                ClearPendingTaskQueue();
-                AppendLog($"[QUEUE][STOPPED] Queue worker stopped; discarded {pendingPathCount} pending path task(s) across {pendingMediaCount} media item(s).");
+                AppendLog($"[QUEUE][STOPPED] Queue worker stopped; pending tasks were marked stopped at stop request.");
             }
             else
             {
@@ -1216,16 +1242,25 @@ RaisePropertyChanged(nameof(BatchStateDetailText));
         }
         finally
         {
+            bool startMainWorker;
             lock (_executionLock)
             {
                 _activeProcess = null;
                 _activeJob = null;
+                IsExecuting = false;
+                IsStopping = false;
+                startMainWorker = GetQueueTaskCount() > 0;
+                if (startMainWorker) IsExecuting = true;
             }
-            IsExecuting = false;
-            IsStopping = false;
             GenerateCommand.RaiseCanExecuteChanged();
             RetryFailedTranslationCommand.RaiseCanExecuteChanged();
             StopCommand.RaiseCanExecuteChanged();
+
+            if (startMainWorker)
+            {
+                AppendLog($"[QUEUE] Draining {GetQueueTaskCount()} pending path task(s) after translation retry.");
+                _ = ProcessTaskQueueAsync();
+            }
         }
     }
 
@@ -1639,6 +1674,15 @@ RaisePropertyChanged(nameof(BatchStateDetailText));
         IsStopping = true;
         _shutdownCancelledForCurrentBatch = true;
         StopCommand.RaiseCanExecuteChanged();
+
+        // Snapshot-and-stop: mark currently-pending queued tasks as Stopped now, so any
+        // task enqueued *after* this request (e.g. a retry) is never wiped by the worker.
+        lock (_taskQueueLock)
+        {
+            _taskQueue.Clear();
+            _queuedMediaIds.Clear();
+        }
+        MarkQueuedEntriesAsStopped();
 
         if (process is null)
         {
