@@ -533,9 +533,7 @@ public sealed class MainViewModel : ObservableObject
         {
             existing.ResetForRetry();
             existing.Phase = TaskPhase.Queued;
-            existing.QueuePosition = CurrentBatch.QueuedCount + 1;
             UpdateMediaTaskPhase(itemId, TaskPhase.Queued);
-            RefreshTaskSummary();
             return existing;
         }
 
@@ -546,11 +544,9 @@ public sealed class MainViewModel : ObservableObject
             FilePath = filePath,
             Phase = TaskPhase.Queued
         };
-        entry.QueuePosition = CurrentBatch.QueuedCount + 1;
         _taskEntryByPath[filePath] = entry;
         CurrentBatch.Add(entry);
         UpdateMediaTaskPhase(itemId, TaskPhase.Queued);
-        RefreshTaskSummary();
         return entry;
     }
 
@@ -559,7 +555,10 @@ public sealed class MainViewModel : ObservableObject
         if (!_taskEntryByPath.TryGetValue(filePath, out var entry)) return;
         entry.Phase = phase;
         if (detail is not null) entry.Detail = detail;
-        if (phase == TaskPhase.Queued) entry.Progress = 0;
+        if (phase == TaskPhase.Queued)
+            entry.Progress = 0;
+        else
+            entry.QueuePosition = 0;
         if (phase == TaskPhase.Failed && detail is not null)
             entry.ErrorMessage = detail;
         UpdateMediaTaskPhase(entry.ItemId, phase);
@@ -571,9 +570,13 @@ public sealed class MainViewModel : ObservableObject
     {
         foreach (var entry in _taskEntryByPath.Values.ToList())
         {
+            if (entry.Phase != TaskPhase.Queued)
+                continue;
             entry.Phase = TaskPhase.Stopped;
+            UpdateMediaTaskPhase(entry.ItemId, TaskPhase.Stopped);
             _taskEntryByPath.Remove(entry.FilePath);
         }
+        RefreshQueuePositions();
         RefreshTaskSummary();
     }
 
@@ -622,9 +625,35 @@ public sealed class MainViewModel : ObservableObject
 
     private void RefreshQueuePositions()
     {
+        List<MediaPathTask> queuedTasks;
+        lock (_taskQueueLock)
+        {
+            queuedTasks = _taskQueue.ToList();
+        }
+
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.CheckAccess())
+            RefreshQueuePositionsCore(queuedTasks);
+        else
+            dispatcher.InvokeAsync(() => RefreshQueuePositionsCore(queuedTasks));
+    }
+
+    private void RefreshQueuePositionsCore(List<MediaPathTask> queuedTasks)
+    {
+        foreach (var entry in CurrentBatch.Tasks)
+            entry.QueuePosition = 0;
+
         var position = 1;
-        foreach (var entry in CurrentBatch.Tasks.Where(entry => entry.Phase == TaskPhase.Queued))
-            entry.QueuePosition = position++;
+        foreach (var task in queuedTasks)
+        {
+            if (_taskEntryByPath.TryGetValue(task.Path, out var entry) &&
+                entry.Phase == TaskPhase.Queued &&
+                entry.QueuePosition == 0)
+            {
+                entry.QueuePosition = position;
+            }
+            position++;
+        }
     }
 
     private void UpdateMediaTaskPhase(string itemId, TaskPhase phase)
@@ -771,6 +800,9 @@ public sealed class MainViewModel : ObservableObject
         RaisePropertyChanged(nameof(SelectionSummary));
         RaisePropertyChanged(nameof(ExecuteButtonText));
         GenerateCommand.RaiseCanExecuteChanged();
+
+        RefreshQueuePositions();
+        RefreshTaskSummary();
 
         AppendLog(queuedCount > 0
             ? $"Added {queuedCount} media item(s) to the task queue."
@@ -1079,13 +1111,16 @@ public sealed class MainViewModel : ObservableObject
         _currentBatchSupportsAutomaticShutdown = false;
         ClearShutdownRequestFailure();
         RaisePropertyChanged(nameof(ShowShutdownWhenCompleteStatus));
-        RaisePropertyChanged(nameof(BatchStateDetailText));
+RaisePropertyChanged(nameof(BatchStateDetailText));
 
         foreach (var task in tasks)
         {
             var entry = AddTaskEntry(task.ItemId, task.MediaName, task.Path);
             entry.Phase = TaskPhase.Translating;
         }
+
+        RefreshQueuePositions();
+        RefreshTaskSummary();
 
         IsExecuting = true;
         IsStopping = false;

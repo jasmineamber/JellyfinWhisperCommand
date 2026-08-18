@@ -44,6 +44,7 @@ public sealed class TaskEntryViewModel : ObservableObject
             if (value is TaskPhase.Completed or TaskPhase.Failed or TaskPhase.Stopped)
                 EndedAt = DateTime.Now;
             RaisePropertyChanged(nameof(PhaseText));
+            RaisePropertyChanged(nameof(QueuePositionText));
             RaisePropertyChanged(nameof(IsActive));
             RaisePropertyChanged(nameof(TimeText));
             RaisePropertyChanged(nameof(CanRetry));
@@ -108,7 +109,8 @@ public sealed class TaskEntryViewModel : ObservableObject
         }
     }
 
-    public string QueuePositionText => QueuePosition > 0 ? $"队列位置 #{QueuePosition}" : "";
+    public string QueuePositionText =>
+        Phase == TaskPhase.Queued && QueuePosition > 0 ? $"队列位置 #{QueuePosition}" : "";
     public string CurrentStep => Detail;
     public string ProgressText => HasRealProgress && Progress > 0 ? $"{Progress:P0}" : "";
     public DateTime CreatedAt { get; } = DateTime.Now;
