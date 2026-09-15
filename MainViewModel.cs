@@ -381,12 +381,7 @@ public sealed class MainViewModel : ObservableObject
             var response = await _client!.GetItemsAsync(SelectedLibraryId, SelectedSort, HasSubtitles, SearchTerm, _pageIndex * PageSize, PageSize);
             foreach (var oldItem in MediaItems) oldItem.PropertyChanged -= OnMediaItemPropertyChanged;
             MediaItems.Clear();
-            var matchedItems = response.Items;
-            if (!string.IsNullOrWhiteSpace(SearchTerm))
-                matchedItems = matchedItems
-                    .Where(i => i.Name.Contains(SearchTerm, StringComparison.CurrentCultureIgnoreCase))
-                    .ToList();
-            foreach (var item in matchedItems)
+            foreach (var item in response.Items)
             {
                 _mediaNameById[item.Id] = string.IsNullOrWhiteSpace(item.Name) ? item.Id : item.Name;
                 var phase = CurrentBatch.Tasks
@@ -399,7 +394,7 @@ public sealed class MainViewModel : ObservableObject
             }
             _totalCount = response.TotalRecordCount;
             IsStatusVisible = false;
-            StatusMessage = $"找到 {MediaItems.Count} 个媒体。";
+            StatusMessage = $"找到 {_totalCount} 个媒体。";
             AppendLog($"媒体查询完成：{MediaItems.Count} 条（共 {_totalCount} 条）。");
             RefreshPaging();
             RefreshSelectionCommands();

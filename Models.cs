@@ -97,6 +97,16 @@ public sealed class JellyfinItemsResponse
     public int TotalRecordCount { get; init; }
 }
 
+public sealed class JellyfinSearchHintsResponse
+{
+    public List<JellyfinSearchHint> SearchHints { get; init; } = [];
+}
+
+public sealed class JellyfinSearchHint
+{
+    public string ItemId { get; init; } = "";
+}
+
 public sealed class JellyfinItem
 {
     public string Id { get; init; } = "";

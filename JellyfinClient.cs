@@ -31,6 +31,9 @@ public sealed class JellyfinClient : IDisposable
 
     public async Task<JellyfinItemsResponse> GetItemsAsync(string libraryId, string sortBy, bool hasSubtitles, string? searchTerm, int startIndex, int limit)
     {
+        if (!string.IsNullOrWhiteSpace(searchTerm))
+            return await GetSearchItemsAsync(libraryId, sortBy, hasSubtitles, searchTerm.Trim(), startIndex, limit);
+
         var query = new Dictionary<string, string>
         {
             ["ParentId"] = libraryId,
@@ -50,6 +53,50 @@ public sealed class JellyfinClient : IDisposable
         await EnsureSuccessAsync(response);
         return await response.Content.ReadFromJsonAsync<JellyfinItemsResponse>(_jsonOptions) ?? new JellyfinItemsResponse();
     }
+
+    private async Task<JellyfinItemsResponse> GetSearchItemsAsync(string libraryId, string sortBy, bool hasSubtitles, string searchTerm, int startIndex, int limit)
+    {
+        // Jellyfin 10.10 ignores SearchTerm on the /Items endpoint. Search hints provide
+        // the matching IDs, after which /Items can apply the remaining filters and paging.
+        var hintQuery = new Dictionary<string, string>
+        {
+            ["SearchTerm"] = searchTerm,
+            ["ParentId"] = libraryId,
+            ["Recursive"] = "true",
+            ["IncludeItemTypes"] = "Movie,Episode,Video",
+            ["Limit"] = "10000"
+        };
+        var hintUrl = $"{_baseUrl}/Search/Hints?{BuildQuery(hintQuery)}";
+        using var hintResponse = await _http.GetAsync(hintUrl);
+        await EnsureSuccessAsync(hintResponse);
+        var hints = await hintResponse.Content.ReadFromJsonAsync<JellyfinSearchHintsResponse>(_jsonOptions)
+                    ?? new JellyfinSearchHintsResponse();
+        var itemIds = hints.SearchHints
+            .Select(x => x.ItemId)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (itemIds.Count == 0) return new JellyfinItemsResponse();
+
+        var itemQuery = new Dictionary<string, string>
+        {
+            ["Ids"] = string.Join(",", itemIds),
+            ["Fields"] = "Path,ImageTags,DateCreated,PremiereDate",
+            ["SortBy"] = sortBy,
+            ["SortOrder"] = "Descending",
+            ["HasSubtitles"] = hasSubtitles.ToString().ToLowerInvariant(),
+            ["StartIndex"] = startIndex.ToString(),
+            ["Limit"] = limit.ToString()
+        };
+        using var itemResponse = await _http.GetAsync($"{_baseUrl}/Items?{BuildQuery(itemQuery)}");
+        await EnsureSuccessAsync(itemResponse);
+        return await itemResponse.Content.ReadFromJsonAsync<JellyfinItemsResponse>(_jsonOptions)
+               ?? new JellyfinItemsResponse();
+    }
+
+    private static string BuildQuery(IEnumerable<KeyValuePair<string, string>> query) =>
+        string.Join("&", query.Select(x => $"{Uri.EscapeDataString(x.Key)}={Uri.EscapeDataString(x.Value)}"));
 
     public async Task<IReadOnlyList<string>> GetPathsAsync(string itemId)
     {
