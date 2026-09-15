@@ -27,6 +27,7 @@ public sealed class TaskEntryViewModel : ObservableObject
     private double _progress;
     private string _errorMessage = "";
     private int _queuePosition;
+    private TaskPhase _retryFromPhase = TaskPhase.Transcribing;
 
     public required string ItemId { get; init; }
     public required string MediaName { get; init; }
@@ -85,6 +86,7 @@ public sealed class TaskEntryViewModel : ObservableObject
     public bool HasDetail => !string.IsNullOrEmpty(_detail);
     public bool HasError => !string.IsNullOrWhiteSpace(_errorMessage);
     public bool CanRetry => Phase is TaskPhase.Failed or TaskPhase.Stopped;
+    public TaskPhase RetryFromPhase => _retryFromPhase;
     public bool CanCancel => Phase == TaskPhase.Queued;
     public bool CanStop => Phase is TaskPhase.Transcribing or TaskPhase.Translating or TaskPhase.PostProcessing;
     public bool IsProcessing => Phase is TaskPhase.Transcribing or TaskPhase.Translating or TaskPhase.PostProcessing;
@@ -147,6 +149,21 @@ public sealed class TaskEntryViewModel : ObservableObject
         QueuePosition = 0;
         RaisePropertyChanged(nameof(TimeText));
         RaisePropertyChanged(nameof(DurationText));
+    }
+
+    /// <summary>
+    /// Records the first processing stage that should be rerun after a failure.
+    /// A translation failure can therefore retry translation directly instead of
+    /// repeating the expensive transcription stage.
+    /// </summary>
+    public void SetRetryFromPhase(TaskPhase phase)
+    {
+        _retryFromPhase = phase switch
+        {
+            TaskPhase.Translating => TaskPhase.Translating,
+            TaskPhase.PostProcessing => TaskPhase.PostProcessing,
+            _ => TaskPhase.Transcribing
+        };
     }
 
     public string TimeText

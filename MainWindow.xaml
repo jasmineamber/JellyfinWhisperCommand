@@ -5,12 +5,12 @@
         xmlns:controls="clr-namespace:JellyfinWhisperCommand.Controls"
         xmlns:views="clr-namespace:JellyfinWhisperCommand.Views"
         xmlns:vm="clr-namespace:JellyfinWhisperCommand"
-        Title="Jellyfin Whisper 命令执行器" Icon="app-icon.ico" Height="820" Width="1200" MinHeight="700" MinWidth="1100"
+        Title="Jellyfin Whisper 命令执行器" Icon="app-icon.ico" Height="820" Width="1100" MinHeight="700" MinWidth="1000"
         Background="{StaticResource Brush.WindowBackground}"
         FontFamily="{StaticResource Font.App}"
         UseLayoutRounding="True" SnapsToDevicePixels="True"
         Closing="Window_Closing"
-        PreviewKeyDown="Window_PreviewKeyDown">
+        PreviewKeyDown="Window_PreviewKeyDown" Loaded="Window_Loaded">
 
   <Grid>
     <Grid.RowDefinitions>

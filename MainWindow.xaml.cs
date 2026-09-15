@@ -14,6 +14,24 @@ public partial class MainWindow : Window
         DataContext = new MainViewModel();
     }
 
+    private async void Window_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainViewModel viewModel || !viewModel.HasFailedTranslationTasks)
+            return;
+
+        var count = viewModel.FailedTranslationTaskCount;
+        var result = MessageBox.Show(
+            $"检测到 {count} 个上次翻译失败的任务。\n\n是否现在重新执行这些任务？\n将从翻译阶段开始，并继续执行后处理。",
+            "发现翻译失败任务",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning,
+            MessageBoxResult.No);
+        if (result != MessageBoxResult.Yes)
+            return;
+
+        await viewModel.RetryFailedTranslationsOnStartupAsync();
+    }
+
     private void DrawerScrim_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (DataContext is MainViewModel viewModel) viewModel.IsLogDrawerOpen = false;

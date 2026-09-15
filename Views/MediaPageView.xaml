@@ -88,7 +88,7 @@
           <ItemsControl.ItemTemplate>
             <DataTemplate>
               <ToggleButton IsChecked="{Binding IsSelected, Mode=TwoWay}"
-                            Width="{DynamicResource Size.PosterCardWidth}" Height="288" Margin="0,0,12,12"
+                            Width="{DynamicResource Size.PosterCardWidth}" Height="288" Margin="0,0,8,12"
                             Background="{DynamicResource Brush.Surface}"
                             BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
                 <ToggleButton.Template>
@@ -227,10 +227,6 @@
         </StackPanel>
 
         <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right">
-          <Button Content="{Binding RetryFailedTranslationButtonText}" Style="{DynamicResource Button.Warning}"
-                  Height="36" Margin="0,0,10,0"
-                  ToolTip="重新执行全部已记录的失败翻译；不会再次转录"
-                  Command="{Binding RetryFailedTranslationCommand}" />
           <Button Content="{Binding ExecuteButtonText}" Style="{DynamicResource Button.Primary}"
                   Height="36" MinWidth="128"
                   ToolTip="将所选媒体加入队列并开始处理（转录、翻译、后处理）"

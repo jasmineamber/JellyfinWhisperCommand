@@ -199,18 +199,18 @@ public sealed class MainViewModel : ObservableObject
     public string ConnectionText => IsConnecting ? "正在连接..." : IsConnected ? "已连接" : "未连接";
     public bool CanGoPrevious => _pageIndex > 0;
     public bool CanGoNext => (_pageIndex + 1) * PageSize < _totalCount;
-    public string RetryFailedTranslationButtonText
-    {
-        get
-        {
-            lock (_retryQueueLock) return $"重试失败翻译 ({_failedTranslationTasks.Count})";
-        }
-    }
     public bool HasFailedTranslationTasks
     {
         get
         {
             lock (_retryQueueLock) return _failedTranslationTasks.Count > 0;
+        }
+    }
+    public int FailedTranslationTaskCount
+    {
+        get
+        {
+            lock (_retryQueueLock) return _failedTranslationTasks.Count;
         }
     }
     public string PageText => _totalCount == 0 ? "第 0 / 0 页" : $"第 {_pageIndex + 1} / {Math.Ceiling(_totalCount / (double)PageSize)} 页";
@@ -236,7 +236,6 @@ public sealed class MainViewModel : ObservableObject
 
     public AsyncRelayCommand SearchCommand { get; }
     public AsyncRelayCommand GenerateCommand { get; }
-    public AsyncRelayCommand RetryFailedTranslationCommand { get; }
     public AsyncRelayCommand StopCommand { get; }
     public AsyncRelayCommand<TaskEntryViewModel> StopTaskCommand { get; }
     public AsyncRelayCommand PreviousPageCommand { get; }
@@ -248,7 +247,6 @@ public sealed class MainViewModel : ObservableObject
     public RelayCommand ToggleLogDrawerCommand { get; }
     public RelayCommand<TaskFilter> SelectTaskFilterCommand { get; }
     public AsyncRelayCommand<TaskEntryViewModel> RetryTaskCommand { get; }
-    public RelayCommand<TaskEntryViewModel> ViewTaskLogCommand { get; }
     public RelayCommand<TaskEntryViewModel> CancelTaskCommand { get; }
 
     public MainViewModel()
@@ -281,7 +279,6 @@ public sealed class MainViewModel : ObservableObject
 
         SearchCommand = new AsyncRelayCommand(SearchAsync, () => _client is not null && !string.IsNullOrWhiteSpace(SelectedLibraryId));
         GenerateCommand = new AsyncRelayCommand(ExecuteAsync, () => _client is not null && _selectedIds.Count > 0);
-        RetryFailedTranslationCommand = new AsyncRelayCommand(RetryFailedTranslationsAsync, () => _failedTranslationTasks.Count > 0 && !IsExecuting);
         StopCommand = new AsyncRelayCommand(StopAsync, () => IsExecuting && !IsStopping);
         StopTaskCommand = new AsyncRelayCommand<TaskEntryViewModel>(StopTaskAsync, entry => entry?.CanStop == true);
         PreviousPageCommand = new AsyncRelayCommand(async () => { _pageIndex--; await LoadPageAsync(); }, () => CanGoPrevious);
@@ -293,7 +290,6 @@ public sealed class MainViewModel : ObservableObject
         ToggleLogDrawerCommand = new RelayCommand(() => IsLogDrawerOpen = !IsLogDrawerOpen);
         SelectTaskFilterCommand = new RelayCommand<TaskFilter>(filter => SelectedTaskFilter = filter);
         RetryTaskCommand = new AsyncRelayCommand<TaskEntryViewModel>(RetryTaskAsync, entry => entry?.CanRetry == true);
-        ViewTaskLogCommand = new RelayCommand<TaskEntryViewModel>(_ => IsLogDrawerOpen = true);
         CancelTaskCommand = new RelayCommand<TaskEntryViewModel>(CancelTask, entry => entry?.CanCancel == true);
         _ = LoadLibrariesAsync();
     }
@@ -550,15 +546,20 @@ public sealed class MainViewModel : ObservableObject
         return entry;
     }
 
-    private void UpdateTaskPhase(string filePath, TaskPhase phase, string? detail = null)
+    private void UpdateTaskPhase(string filePath, TaskPhase phase, string? detail = null, TaskPhase? retryFromPhase = null)
     {
         if (!_taskEntryByPath.TryGetValue(filePath, out var entry)) return;
+        var previousPhase = entry.Phase;
         entry.Phase = phase;
         if (detail is not null) entry.Detail = detail;
         if (phase == TaskPhase.Queued)
             entry.Progress = 0;
         else
             entry.QueuePosition = 0;
+        if (phase is TaskPhase.Failed or TaskPhase.Stopped)
+        {
+            entry.SetRetryFromPhase(retryFromPhase ?? previousPhase);
+        }
         if (phase == TaskPhase.Failed && detail is not null)
             entry.ErrorMessage = detail;
         UpdateMediaTaskPhase(entry.ItemId, phase);
@@ -680,6 +681,7 @@ public sealed class MainViewModel : ObservableObject
     {
         if (entry is null || !entry.CanRetry) return;
 
+        var startPhase = entry.RetryFromPhase;
         bool enqueue;
         lock (_taskQueueLock)
         {
@@ -687,7 +689,7 @@ public sealed class MainViewModel : ObservableObject
             if (enqueue)
             {
                 _queuedMediaIds.Add(entry.ItemId);
-                _taskQueue.Enqueue(new MediaPathTask(entry.ItemId, entry.MediaName, entry.FilePath));
+                _taskQueue.Enqueue(new MediaPathTask(entry.ItemId, entry.MediaName, entry.FilePath, startPhase));
             }
         }
         if (!enqueue) return;
@@ -806,7 +808,7 @@ public sealed class MainViewModel : ObservableObject
                 {
                     foreach (var path in itemPaths)
                     {
-                        _taskQueue.Enqueue(new MediaPathTask(itemId, mediaName, path));
+                        _taskQueue.Enqueue(new MediaPathTask(itemId, mediaName, path, TaskPhase.Transcribing));
                         AddTaskEntry(itemId, mediaName, path);
                         AppendLog($"[QUEUE]   Added path: {path}");
                     }
@@ -866,7 +868,6 @@ public sealed class MainViewModel : ObservableObject
             IsStopping = false;
 
         GenerateCommand.RaiseCanExecuteChanged();
-        RetryFailedTranslationCommand.RaiseCanExecuteChanged();
         StopCommand.RaiseCanExecuteChanged();
 
         var allSucceeded = true;
@@ -877,20 +878,7 @@ public sealed class MainViewModel : ObservableObject
             var firstTask = GetNextQueuedTask();
             if (firstTask is null) return;
 
-            var validationStartInfo = CommandBuilder.BuildStartInfo([firstTask.Value.Path], _settings.WhisperJav);
-            if (!File.Exists(validationStartInfo.FileName))
-            {
-                const string failure = "WhisperJav executable was not found.";
-                foreach (var queuedTask in GetQueuedTasksSnapshot())
-                {
-                    AppendWhisperJavFailure(queuedTask, failure);
-                    UpdateTaskPhase(queuedTask.Path, TaskPhase.Failed, "找不到 WhisperJav 可执行文件");
-                }
-                throw new FileNotFoundException(failure, validationStartInfo.FileName);
-            }
-
             CurrentPage = PageKind.Tasks;
-            AppendLog($"WhisperJav executable: {validationStartInfo.FileName}");
 
             while (true)
             {
@@ -913,94 +901,16 @@ public sealed class MainViewModel : ObservableObject
                 if (WasStopRequested(currentTask.Path))
                 {
                     ClearStopRequest(currentTask.Path);
-                    UpdateTaskPhase(currentTask.Path, TaskPhase.Stopped);
+                    UpdateTaskPhase(currentTask.Path, TaskPhase.Stopped, null, currentTask.StartPhase);
                     AppendLog($"[QUEUE][STOPPED] Task stopped before start: {currentTask.Path}");
                     ReleaseQueuedMediaIdIfFinished(currentTask.ItemId);
                     continue;
                 }
 
-                var taskSucceeded = false;
-                UpdateTaskPhase(currentTask.Path, TaskPhase.Transcribing, "正在运行 WhisperJav 转录");
-                if (!await ExecuteWhisperJavAsync(currentTask, 1, 1))
-                {
-                    if (WasStopRequested(currentTask.Path))
-                    {
-                        ClearStopRequest(currentTask.Path);
-                        UpdateTaskPhase(currentTask.Path, TaskPhase.Stopped);
-                        AppendLog($"[QUEUE][STOPPED] Task stopped during WhisperJav: {currentTask.Path}");
-                    }
-                    else
-                    {
-                        allSucceeded = false;
-                        UpdateTaskPhase(currentTask.Path, TaskPhase.Failed, "转录失败");
-                        AppendLog($"[QUEUE][FAILED] WhisperJav failed: {currentTask.Path}", NLog.LogLevel.Error);
-                    }
-                }
-                else if (WasStopRequested(currentTask.Path))
-                {
-                    ClearStopRequest(currentTask.Path);
-                    UpdateTaskPhase(currentTask.Path, TaskPhase.Stopped);
-                    AppendLog($"[QUEUE][STOPPED] Task stopped after WhisperJav: {currentTask.Path}");
-                }
-                else if (IsStopping)
-                {
-                    UpdateTaskPhase(currentTask.Path, TaskPhase.Stopped);
-                    AppendLog($"[QUEUE][STOPPING] Current task interrupted after WhisperJav: {currentTask.Path}");
-                }
-                else
-                {
-                    UpdateTaskPhase(currentTask.Path, TaskPhase.Translating, "正在翻译字幕");
-                    if (!await ExecuteSubtitleTranslationAsync(currentTask, 1, 1))
-                    {
-                        if (WasStopRequested(currentTask.Path))
-                        {
-                            ClearStopRequest(currentTask.Path);
-                            UpdateTaskPhase(currentTask.Path, TaskPhase.Stopped);
-                            AppendLog($"[QUEUE][STOPPED] Task stopped during translation: {currentTask.Path}");
-                        }
-                        else
-                        {
-                            allSucceeded = false;
-                            UpdateTaskPhase(currentTask.Path, TaskPhase.Failed, "翻译失败");
-                            AppendLog($"[QUEUE][FAILED] Translation failed: {currentTask.Path}", NLog.LogLevel.Error);
-                        }
-                    }
-                    else if (WasStopRequested(currentTask.Path))
-                    {
-                        ClearStopRequest(currentTask.Path);
-                        UpdateTaskPhase(currentTask.Path, TaskPhase.Stopped);
-                        AppendLog($"[QUEUE][STOPPED] Task stopped after translation: {currentTask.Path}");
-                    }
-                    else if (IsStopping)
-                    {
-                        UpdateTaskPhase(currentTask.Path, TaskPhase.Stopped);
-                        AppendLog($"[QUEUE][STOPPING] Current task interrupted after translation: {currentTask.Path}");
-                    }
-                    else
-                    {
-                        UpdateTaskPhase(currentTask.Path, TaskPhase.PostProcessing, "正在执行 Seconv 后处理");
-                        var seconvResult = await ExecuteSeconvCommandsAsync([currentTask.Path]);
-                        allSucceeded &= seconvResult.AllSucceeded;
-                        subtitleMoved |= seconvResult.SubtitleCopied;
-                        taskSucceeded = seconvResult.AllSucceeded;
-                        if (WasStopRequested(currentTask.Path))
-                        {
-                            ClearStopRequest(currentTask.Path);
-                            UpdateTaskPhase(currentTask.Path, TaskPhase.Stopped);
-                            AppendLog($"[QUEUE][STOPPED] Task stopped during post-processing: {currentTask.Path}");
-                        }
-                        else if (seconvResult.AllSucceeded)
-                        {
-                            UpdateTaskPhase(currentTask.Path, TaskPhase.Completed, "全部完成");
-                            RemoveTranslationRetryTask(currentTask.Path);
-                        }
-                        else
-                        {
-                            UpdateTaskPhase(currentTask.Path, TaskPhase.Failed, "后处理失败");
-                            AppendLog($"[QUEUE][FAILED] Seconv/post-processing failed: {currentTask.Path}", NLog.LogLevel.Error);
-                        }
-                    }
-                }
+                var result = await ExecuteQueuedTaskAsync(currentTask);
+                allSucceeded &= result.Succeeded;
+                subtitleMoved |= result.SubtitleMoved;
+                var taskSucceeded = result.Succeeded;
 
                 ReleaseQueuedMediaIdIfFinished(currentTask.ItemId);
                 AppendLog(taskSucceeded
@@ -1055,7 +965,6 @@ public sealed class MainViewModel : ObservableObject
 
             RaisePropertyChanged(nameof(SelectionSummary));
             GenerateCommand.RaiseCanExecuteChanged();
-            RetryFailedTranslationCommand.RaiseCanExecuteChanged();
             StopCommand.RaiseCanExecuteChanged();
 
             if (restartWorker)
@@ -1070,16 +979,105 @@ public sealed class MainViewModel : ObservableObject
         }
     }
 
+    private async Task<(bool Succeeded, bool SubtitleMoved)> ExecuteQueuedTaskAsync(MediaPathTask currentTask)
+    {
+        if (currentTask.StartPhase is not (TaskPhase.Transcribing or TaskPhase.Translating or TaskPhase.PostProcessing))
+        {
+            AppendLog($"[QUEUE][ERROR] Invalid start phase for task: {currentTask.Path}", NLog.LogLevel.Error);
+            UpdateTaskPhase(currentTask.Path, TaskPhase.Failed, "无效的任务起始阶段");
+            return (false, false);
+        }
+
+        if (WasStopRequested(currentTask.Path))
+        {
+            ClearStopRequest(currentTask.Path);
+            UpdateTaskPhase(currentTask.Path, TaskPhase.Stopped, null, currentTask.StartPhase);
+            AppendLog($"[QUEUE][STOPPED] Task stopped before start: {currentTask.Path}");
+            return (false, false);
+        }
+
+        if (currentTask.StartPhase == TaskPhase.Transcribing)
+        {
+            UpdateTaskPhase(currentTask.Path, TaskPhase.Transcribing, "正在运行 WhisperJav 转录");
+            if (!await ExecuteWhisperJavAsync(currentTask, 1, 1))
+            {
+                if (WasStopRequested(currentTask.Path) || IsStopping)
+                {
+                    ClearStopRequest(currentTask.Path);
+                    UpdateTaskPhase(currentTask.Path, TaskPhase.Stopped);
+                    AppendLog($"[QUEUE][STOPPED] Task stopped during WhisperJav: {currentTask.Path}");
+                }
+                else
+                {
+                    UpdateTaskPhase(currentTask.Path, TaskPhase.Failed, "转录失败");
+                    AppendLog($"[QUEUE][FAILED] WhisperJav failed: {currentTask.Path}", NLog.LogLevel.Error);
+                }
+                return (false, false);
+            }
+
+            if (WasStopRequested(currentTask.Path) || IsStopping)
+            {
+                ClearStopRequest(currentTask.Path);
+                UpdateTaskPhase(currentTask.Path, TaskPhase.Stopped);
+                AppendLog($"[QUEUE][STOPPED] Task stopped after WhisperJav: {currentTask.Path}");
+                return (false, false);
+            }
+        }
+
+        if (currentTask.StartPhase is TaskPhase.Transcribing or TaskPhase.Translating)
+        {
+            UpdateTaskPhase(currentTask.Path, TaskPhase.Translating, "正在翻译字幕");
+            if (!await ExecuteSubtitleTranslationAsync(currentTask, 1, 1))
+            {
+                if (WasStopRequested(currentTask.Path) || IsStopping)
+                {
+                    ClearStopRequest(currentTask.Path);
+                    UpdateTaskPhase(currentTask.Path, TaskPhase.Stopped);
+                    AppendLog($"[QUEUE][STOPPED] Task stopped during translation: {currentTask.Path}");
+                }
+                else
+                {
+                    UpdateTaskPhase(currentTask.Path, TaskPhase.Failed, "翻译失败");
+                    AppendLog($"[QUEUE][FAILED] Translation failed: {currentTask.Path}", NLog.LogLevel.Error);
+                }
+                return (false, false);
+            }
+
+            if (WasStopRequested(currentTask.Path) || IsStopping)
+            {
+                ClearStopRequest(currentTask.Path);
+                UpdateTaskPhase(currentTask.Path, TaskPhase.Stopped);
+                AppendLog($"[QUEUE][STOPPED] Task stopped after translation: {currentTask.Path}");
+                return (false, false);
+            }
+        }
+
+        UpdateTaskPhase(currentTask.Path, TaskPhase.PostProcessing, "正在执行 Seconv 后处理");
+        var seconvResult = await ExecuteSeconvCommandsAsync([currentTask.Path]);
+        if (WasStopRequested(currentTask.Path) || IsStopping)
+        {
+            ClearStopRequest(currentTask.Path);
+            UpdateTaskPhase(currentTask.Path, TaskPhase.Stopped);
+            AppendLog($"[QUEUE][STOPPED] Task stopped during post-processing: {currentTask.Path}");
+            return (false, seconvResult.SubtitleCopied);
+        }
+
+        if (seconvResult.AllSucceeded)
+        {
+            UpdateTaskPhase(currentTask.Path, TaskPhase.Completed, "全部完成");
+            RemoveTranslationRetryTask(currentTask.Path);
+            return (true, seconvResult.SubtitleCopied);
+        }
+
+        UpdateTaskPhase(currentTask.Path, TaskPhase.Failed, "后处理失败");
+        AppendLog($"[QUEUE][FAILED] Seconv/post-processing failed: {currentTask.Path}", NLog.LogLevel.Error);
+        return (false, seconvResult.SubtitleCopied);
+    }
+
     private MediaPathTask? GetNextQueuedTask()
     {
         lock (_taskQueueLock)
             return _taskQueue.Count == 0 ? null : _taskQueue.Peek();
-    }
-
-    private MediaPathTask? DequeueNextTask()
-    {
-        lock (_taskQueueLock)
-            return _taskQueue.Count == 0 ? null : _taskQueue.Dequeue();
     }
 
     private int GetQueueTaskCount()
@@ -1092,12 +1090,6 @@ public sealed class MainViewModel : ObservableObject
     {
         lock (_taskQueueLock)
             return _queuedMediaIds.Count;
-    }
-
-    private IReadOnlyList<MediaPathTask> GetQueuedTasksSnapshot()
-    {
-        lock (_taskQueueLock)
-            return _taskQueue.ToList();
     }
 
     private void ReleaseQueuedMediaIdIfFinished(string itemId)
@@ -1122,146 +1114,60 @@ public sealed class MainViewModel : ObservableObject
         RaisePropertyChanged(nameof(SelectionSummary));
     }
 
-    private async Task RetryFailedTranslationsAsync()
+    public Task RetryFailedTranslationsOnStartupAsync()
     {
         List<MediaPathTask> tasks;
         lock (_retryQueueLock)
         {
             tasks = _failedTranslationTasks
-                .Select(task => new MediaPathTask(task.ItemId, task.MediaName, task.MediaPath))
+                .Select(task => new MediaPathTask(task.ItemId, task.MediaName, task.MediaPath, TaskPhase.Translating))
                 .ToList();
         }
-        if (tasks.Count == 0) return;
+        if (tasks.Count == 0) return Task.CompletedTask;
 
         _shutdownCancelledForCurrentBatch = false;
-        _currentBatchSupportsAutomaticShutdown = false;
+        _currentBatchSupportsAutomaticShutdown = true;
         ClearShutdownRequestFailure();
         RaisePropertyChanged(nameof(ShowShutdownWhenCompleteStatus));
-RaisePropertyChanged(nameof(BatchStateDetailText));
+        RaisePropertyChanged(nameof(BatchStateDetailText));
 
-        foreach (var task in tasks)
+        var queuedCount = 0;
+        lock (_taskQueueLock)
         {
-            var entry = AddTaskEntry(task.ItemId, task.MediaName, task.Path);
-            entry.Phase = TaskPhase.Translating;
+            foreach (var task in tasks)
+            {
+                if (_taskQueue.Any(queued => string.Equals(queued.Path, task.Path, StringComparison.OrdinalIgnoreCase)))
+                    continue;
+
+                _queuedMediaIds.Add(task.ItemId);
+                _taskQueue.Enqueue(task);
+                var entry = AddTaskEntry(task.ItemId, task.MediaName, task.Path);
+                entry.Phase = TaskPhase.Queued;
+                queuedCount++;
+            }
         }
 
         RefreshQueuePositions();
         RefreshTaskSummary();
+        CurrentPage = PageKind.Tasks;
+        AppendLog($"[QUEUE] Startup recovery queued {queuedCount} failed translation task(s). Pending path tasks: {GetQueueTaskCount()}.");
 
-        IsExecuting = true;
-        IsStopping = false;
+        bool startWorker;
+        lock (_executionLock)
+        {
+            IsStopping = false;
+            startWorker = !IsExecuting && GetQueueTaskCount() > 0;
+            if (startWorker) IsExecuting = true;
+        }
+
         GenerateCommand.RaiseCanExecuteChanged();
-        RetryFailedTranslationCommand.RaiseCanExecuteChanged();
         StopCommand.RaiseCanExecuteChanged();
+        RaisePropertyChanged(nameof(SelectionSummary));
 
-        try
-        {
-            var validationStartInfo = CommandBuilder.BuildTranslateStartInfo(GetTranscriptionSubtitlePath(tasks[0].Path), _settings.WhisperJavTranslate);
-            if (!File.Exists(validationStartInfo.FileName))
-                throw new FileNotFoundException("Subtitle translation executable was not found.", validationStartInfo.FileName);
+        if (startWorker)
+            _ = ProcessTaskQueueAsync();
 
-            CurrentPage = PageKind.Tasks;
-            AppendLog($"Retrying all failed translation tasks: {tasks.Count}.");
-            var allSucceeded = true;
-            var subtitleMoved = false;
-            for (var taskIndex = 0; taskIndex < tasks.Count; taskIndex++)
-            {
-                if (IsStopping) break;
-
-                var task = tasks[taskIndex];
-                if (WasStopRequested(task.Path))
-                {
-                    ClearStopRequest(task.Path);
-                    UpdateTaskPhase(task.Path, TaskPhase.Stopped);
-                    continue;
-                }
-                if (!await ExecuteSubtitleTranslationAsync(task, taskIndex + 1, tasks.Count))
-                {
-                    if (WasStopRequested(task.Path))
-                    {
-                        ClearStopRequest(task.Path);
-                        UpdateTaskPhase(task.Path, TaskPhase.Stopped);
-                    }
-                    else
-                    {
-                        allSucceeded = false;
-                        UpdateTaskPhase(task.Path, TaskPhase.Failed, "翻译失败");
-                    }
-                    continue;
-                }
-                if (IsStopping) break;
-
-                UpdateTaskPhase(task.Path, TaskPhase.PostProcessing, "正在执行 Seconv 后处理");
-                var seconvResult = await ExecuteSeconvCommandsAsync([task.Path]);
-                allSucceeded &= seconvResult.AllSucceeded;
-                subtitleMoved |= seconvResult.SubtitleCopied;
-                if (WasStopRequested(task.Path))
-                {
-                    ClearStopRequest(task.Path);
-                    UpdateTaskPhase(task.Path, TaskPhase.Stopped);
-                }
-                else if (seconvResult.AllSucceeded)
-                {
-                    UpdateTaskPhase(task.Path, TaskPhase.Completed, "全部完成");
-                    RemoveTranslationRetryTask(task.Path);
-                }
-                else
-                {
-                    UpdateTaskPhase(task.Path, TaskPhase.Failed, "后处理失败");
-                }
-            }
-
-            if (IsStopping)
-            {
-                AppendLog("Failed translation retry queue stopped.");
-            }
-            else
-            {
-                if (subtitleMoved && _client is not null && !string.IsNullOrWhiteSpace(SelectedLibraryId))
-                {
-                    try
-                    {
-                        await _client!.RefreshLibraryAsync(SelectedLibraryId);
-                        AppendLog("Jellyfin library refresh requested after subtitle move.");
-                    }
-                    catch (Exception ex)
-                    {
-                        AppendLog($"[ERROR] Failed to refresh Jellyfin library: {ex.Message}", NLog.LogLevel.Error);
-                    }
-                }
-
-                AppendLog(allSucceeded ? "All failed translation tasks completed." : "Failed translation retry completed with failures.");
-            }
-        }
-        catch (Exception ex)
-        {
-            foreach (var task in tasks)
-                UpdateTaskPhase(task.Path, TaskPhase.Failed, "重试准备失败");
-            CurrentPage = PageKind.Tasks;
-            AppendLog($"[ERROR] {ex.Message}", NLog.LogLevel.Error);
-        }
-        finally
-        {
-            bool startMainWorker;
-            lock (_executionLock)
-            {
-                _activeProcess = null;
-                _activeJob = null;
-                IsExecuting = false;
-                IsStopping = false;
-                startMainWorker = GetQueueTaskCount() > 0;
-                if (startMainWorker) IsExecuting = true;
-            }
-            GenerateCommand.RaiseCanExecuteChanged();
-            RetryFailedTranslationCommand.RaiseCanExecuteChanged();
-            StopCommand.RaiseCanExecuteChanged();
-
-            if (startMainWorker)
-            {
-                AppendLog($"[QUEUE] Draining {GetQueueTaskCount()} pending path task(s) after translation retry.");
-                _ = ProcessTaskQueueAsync();
-            }
-        }
+        return Task.CompletedTask;
     }
 
     private async Task<bool> ExecuteWhisperJavAsync(MediaPathTask task, int taskIndex, int taskCount)
@@ -1453,9 +1359,7 @@ RaisePropertyChanged(nameof(BatchStateDetailText));
 
     private void RefreshTranslationRetryQueueState()
     {
-        RaisePropertyChanged(nameof(RetryFailedTranslationButtonText));
         RaisePropertyChanged(nameof(HasFailedTranslationTasks));
-        RetryFailedTranslationCommand.RaiseCanExecuteChanged();
     }
 
     private string GetTranscriptionSubtitlePath(string mediaPath)
@@ -1486,7 +1390,7 @@ RaisePropertyChanged(nameof(BatchStateDetailText));
         }
     }
 
-    private readonly record struct MediaPathTask(string ItemId, string MediaName, string Path);
+    private readonly record struct MediaPathTask(string ItemId, string MediaName, string Path, TaskPhase StartPhase);
 
     private async Task<SeconvResult> ExecuteSeconvCommandsAsync(IEnumerable<string> mediaPaths)
     {
