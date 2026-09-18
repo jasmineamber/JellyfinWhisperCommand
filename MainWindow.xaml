@@ -179,7 +179,7 @@
                     Click="ViewLogFile_Click" />
           </Grid>
           <nlog:NlogRichTextBox Grid.Row="1" x:Name="LogTextBox" Margin="8,0,8,8"
-                                 Background="Transparent" />
+                                 Background="Transparent" MaxRowCount="2000" />
         </Grid>
       </Border>
     </Grid>

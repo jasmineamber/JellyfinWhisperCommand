@@ -39,7 +39,7 @@ public partial class MainWindow : Window
 
     private void ViewLogFile_Click(object sender, RoutedEventArgs e)
     {
-        var logPath = Path.Combine(AppContext.BaseDirectory, "execution.log");
+        var logPath = Path.Combine(AppContext.BaseDirectory, "logs", "execution.log");
         if (!File.Exists(logPath))
         {
             MessageBox.Show($"日志文件尚未创建：{logPath}", "日志", MessageBoxButton.OK, MessageBoxImage.Information);

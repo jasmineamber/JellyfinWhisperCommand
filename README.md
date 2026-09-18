@@ -19,7 +19,7 @@ Translation is considered successful only when the process exits with code `0` *
 Retryable translation failures are persisted beside the executable in `failed-translation-tasks.json`. Use **重试失败翻译 (N)** to retry every queued item without searching for or selecting media. Each item leaves the queue only after translation and Seconv both succeed; it remains queued when a retry fails again.
 
 The remembered media library is written beside the program as `user-settings.json`. It is intentionally not placed in AppData.
-Execution output is shown in the "日志" tab and is also appended to `execution.log` beside the program.
+Execution output is shown in the "日志" tab and is written to `logs\execution.log` beside the program. The current log is archived daily as `logs\execution.yyyyMMdd.log`, with the 30 most recent archive files retained.
 WhisperJav failures are additionally appended to `failed-whisperjav-tasks.log` with the media ID, name, path, and failure reason.
 
 `appsettings.json` and `user-settings.json` remain beside the executable and are excluded from Git because they can contain credentials and personal selection state.
